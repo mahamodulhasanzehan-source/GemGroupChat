@@ -2,21 +2,22 @@ import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 
 // Initialize Gemini Client
-// Note: In a production React app, using process.env directly for API keys is risky if not proxied.
-// However, per instructions, we are using the Vercel env var directly.
 const apiKey = process.env.GEMINI_API_KEY_1;
 
-const ai = new GoogleGenAI({ apiKey: apiKey || '' });
+// We initialize even if empty to prevent import crashes, but check at usage time
+const ai = new GoogleGenAI({ apiKey: apiKey || 'dummy-key-for-init' });
 
 export const streamGeminiResponse = async (
   prompt: string, 
   history: { role: 'user' | 'model', text: string }[],
   onChunk: (text: string) => void
 ) => {
+  if (!apiKey) {
+      onChunk("⚠️ **Configuration Error**: `GEMINI_API_KEY_1` is missing. Please check your environment variables.");
+      return;
+  }
+
   try {
-    // Construct history in the format Gemini expects or just send prompt if simple
-    // For a simple chat implementation, we will use the chat helper
-    
     const chat = ai.chats.create({
       model: GEMINI_MODEL,
       history: history.map(h => ({
