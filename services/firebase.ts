@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
-// Mapping Vercel/Screenshot Env Vars to Firebase Config
+// 1. Strict Mapping based on your list
 const firebaseConfig = {
   apiKey: process.env.GEMGROUPCHAT_KEY,
   authDomain: process.env.GEMGROUPCHAT_AUTH,
@@ -17,17 +17,31 @@ let auth: any;
 let db: any;
 let googleProvider: any;
 let isConfigured = false;
+let missingKeys: string[] = [];
 
-// Initialize Firebase only if config is present
+// 2. Validation
+Object.entries(firebaseConfig).forEach(([key, value]) => {
+    if (!value) {
+        // Map back to the Env Var name for clarity
+        const envName = key === 'apiKey' ? 'GEMGROUPCHAT_KEY' :
+                        key === 'authDomain' ? 'GEMGROUPCHAT_AUTH' :
+                        key === 'projectId' ? 'GEMGROUPCHAT_ID' :
+                        key === 'storageBucket' ? 'GEMGROUPCHAT_BUCKET' :
+                        key === 'messagingSenderId' ? 'GEMGROUPCHAT_SENDER' :
+                        key === 'appId' ? 'GEMGROUPCHAT_APP' : key;
+        missingKeys.push(envName);
+    }
+});
+
 try {
-  if (firebaseConfig.apiKey) {
+  if (missingKeys.length === 0) {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
     googleProvider = new GoogleAuthProvider();
     isConfigured = true;
   } else {
-    console.warn("Firebase config missing. Authentication will fail.");
+    console.warn("Firebase config missing keys:", missingKeys.join(", "));
   }
 } catch (error) {
   console.error("Failed to initialize Firebase:", error);
@@ -41,8 +55,6 @@ export const subscribeToAuth = (callback: (user: any) => void) => {
   if (isConfigured && auth) {
     return onAuthStateChanged(auth, callback);
   } else {
-    // If not configured, we never return a user (unless we want to support pure offline guest mode which requires a local mock, 
-    // but the user requested 'Actual Authentication')
     callback(null);
     return () => {};
   }
@@ -50,15 +62,20 @@ export const subscribeToAuth = (callback: (user: any) => void) => {
 
 export const signInWithGoogle = async () => {
   if (!isConfigured || !auth) {
-    alert("Firebase Configuration is missing. Please check your Vercel Environment Variables.");
+    alert(`Firebase Configuration Error.\n\nMissing Environment Variables:\n${missingKeys.join('\n')}\n\nPlease check your Vercel Project Settings.`);
     return false;
   }
   try {
     await signInWithPopup(auth, googleProvider);
     return true;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error signing in with Google", error);
-    alert("Google Sign-In failed. Check console for details.");
+    // If the error is related to domain/auth
+    if (error.code === 'auth/unauthorized-domain') {
+        alert("Domain Error: This domain is not authorized in Firebase Console.\n\nGo to Firebase Console -> Authentication -> Settings -> Authorized Domains and add this URL.");
+    } else {
+        alert(`Google Sign-In failed: ${error.message}`);
+    }
     return false;
   }
 };
@@ -66,7 +83,6 @@ export const signInWithGoogle = async () => {
 export const updateUserProfile = async (name: string) => {
     if (isConfigured && auth && auth.currentUser) {
         await updateProfile(auth.currentUser, { displayName: name });
-        // Force refresh to update UI
         auth.updateCurrentUser(auth.currentUser); 
     }
 }
@@ -86,21 +102,7 @@ export const signInGuest = async () => {
       alert(`Guest Sign-In failed: ${error.message}`);
     }
   } else {
-      // Fallback for completely unconfigured environment to prevent white screen
-      // This is the ONLY simulation allowed: for Guest/Skip mode when keys are missing.
-      // But for Google Sign In, we STRICTLY fail.
-      alert("Note: Firebase keys are missing. Running in limited offline guest mode.");
-      const mockGuest = {
-        uid: 'guest-' + Date.now(),
-        displayName: name || 'Guest',
-        isAnonymous: true,
-        photoURL: null
-      };
-      // We need to manually trigger the callback for the app to load
-      // This is a hack ONLY for "Skip" when no backend exists.
-      // In a real scenario, subscribeToAuth handles this.
-      // This requires modifying subscribeToAuth to handle manual overrides which we tried to avoid.
-      // For now, we alert.
+      alert(`Cannot start Guest Session.\n\nMissing Environment Variables:\n${missingKeys.join('\n')}`);
   }
 };
 

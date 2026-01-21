@@ -1,11 +1,12 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 
-// Initialize Gemini Client
-const apiKey = process.env.GEMINI_API_KEY_1;
+// Use API_KEY from environment variables as per guidelines.
+// Fallback to GEMINI_API_KEY_1 for backward compatibility with existing setup.
+const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY_1;
 
-// We initialize even if empty to prevent import crashes, but check at usage time
-const ai = new GoogleGenAI({ apiKey: apiKey || 'dummy-key-for-init' });
+// Initialize GoogleGenAI
+const ai = new GoogleGenAI({ apiKey: apiKey || '' });
 
 export const streamGeminiResponse = async (
   prompt: string, 
@@ -13,12 +14,7 @@ export const streamGeminiResponse = async (
   onChunk: (text: string) => void
 ) => {
   if (!apiKey) {
-      onChunk(`⚠️ **Configuration Error**: \`GEMINI_API_KEY_1\` is missing from your Vercel Environment Variables.
-      
-To fix this:
-1. Go to your Vercel Project Settings.
-2. Navigate to **Environment Variables**.
-3. Add a new variable named \`GEMINI_API_KEY_1\` with your Google Gemini API key.`);
+      onChunk(`⚠️ **Configuration Error**: \`API_KEY\` is missing from your Environment Variables.`);
       return;
   }
 

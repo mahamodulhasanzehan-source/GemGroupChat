@@ -127,16 +127,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   return (
     <div className="flex-1 flex flex-col h-full bg-[#131314] relative overflow-hidden">
       {/* Top Bar */}
-      <div className="h-16 flex items-center justify-between px-6 border-b border-[#444746] bg-[#131314] sticky top-0 z-10">
+      <div className="h-16 flex items-center justify-between px-6 border-b border-[#444746] bg-[#131314] sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
-          <span className="text-[#E3E3E3] font-medium text-lg">{groupName || 'Group Chat'}</span>
-          <span className="text-[#C4C7C5] text-sm hidden sm:inline-block">▼</span>
+          <span className="text-[#E3E3E3] font-medium text-lg tracking-tight animate-[fadeIn_0.5s_ease-out]">{groupName || 'Group Chat'}</span>
+          <span className="text-[#C4C7C5] text-sm hidden sm:inline-block cursor-pointer hover:text-white transition-colors">▼</span>
         </div>
         
         {groupId && (
-           <div className="bg-[#1E1F20] px-3 py-1 rounded-full border border-[#444746] flex items-center gap-2">
-              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-              <span className="text-xs text-[#E3E3E3]">Live Session</span>
+           <div className="bg-[#1E1F20] px-3 py-1 rounded-full border border-[#444746] flex items-center gap-2 animate-[fadeIn_0.5s_ease-out]">
+              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.5)]"></span>
+              <span className="text-xs text-[#E3E3E3] font-medium">Live Session</span>
            </div>
         )}
       </div>
@@ -144,8 +144,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex flex-col items-center scroll-smooth">
         {localMessages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-[#C4C7C5] opacity-50">
-             <p>No messages yet. Start the conversation!</p>
+          <div className="flex flex-col items-center justify-center h-full text-[#C4C7C5] opacity-50 animate-[fadeIn_0.8s_ease-out]">
+             <p className="text-lg font-light">No messages yet. Start the conversation!</p>
           </div>
         ) : (
           <div className="w-full max-w-3xl space-y-6 pb-24">
@@ -154,26 +154,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
               const isGemini = msg.role === 'model';
               
               return (
-                <div key={msg.id} className={`flex gap-4 ${isMe && !isGemini ? 'flex-row-reverse' : 'flex-row'}`}>
+                <div key={msg.id} className={`flex gap-4 ${isMe && !isGemini ? 'flex-row-reverse' : 'flex-row'} animate-[fadeIn_0.3s_ease-out]`}>
                   {/* Avatar */}
-                  <div className={`w-8 h-8 rounded-full shrink-0 flex items-center justify-center overflow-hidden border border-[#444746] ${isGemini ? 'bg-transparent' : 'bg-[#1E1F20]'}`}>
+                  <div className={`w-8 h-8 rounded-full shrink-0 flex items-center justify-center overflow-hidden border border-[#444746] shadow-md transition-transform hover:scale-105 ${isGemini ? 'bg-transparent' : 'bg-[#1E1F20]'}`}>
                     {isGemini ? (
                        <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" alt="AI" className="w-6 h-6 animate-[spin_10s_linear_infinite]" />
                     ) : (
-                       <span className="text-xs text-white font-bold">{msg.senderName?.[0] || 'U'}</span>
+                       <span className="text-xs text-white font-bold select-none">{msg.senderName?.[0]?.toUpperCase() || 'U'}</span>
                     )}
                   </div>
                   
                   {/* Message Content */}
                   <div className={`flex flex-col max-w-[85%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
-                    <div className="text-xs text-[#C4C7C5] mb-1 px-1 flex gap-2">
+                    <div className="text-xs text-[#C4C7C5] mb-1 px-1 flex gap-2 select-none">
                       <span className="font-medium text-[#E3E3E3]">{msg.senderName}</span>
                       <span className="opacity-50">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                     
-                    <div className={`prose prose-invert prose-sm md:prose-base text-[#E3E3E3] leading-relaxed break-words max-w-full ${msg.isLoading ? 'animate-pulse' : ''}`}>
+                    <div className={`prose prose-invert prose-sm md:prose-base text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-2xl p-3 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20] rounded-tr-none' : 'bg-transparent pl-0'} ${msg.isLoading ? 'animate-pulse' : ''}`}>
                       {msg.isLoading && !msg.text ? (
-                          <div className="flex gap-1 mt-2">
+                          <div className="flex gap-1 mt-2 p-2">
                              <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce"></div>
                              <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce delay-100"></div>
                              <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce delay-200"></div>
@@ -184,16 +184,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                               code(props) {
                                 const {children, className, node, ...rest} = props
                                 const match = /language-(\w+)/.exec(className || '')
-                                return match ? (
-                                  <SyntaxHighlighter
-                                    {...rest}
-                                    PreTag="div"
-                                    children={String(children).replace(/\n$/, '')}
-                                    language={match[1]}
-                                    style={vscDarkPlus}
-                                    customStyle={{ margin: 0, borderRadius: '0.5rem', fontSize: '0.9em' }}
-                                  />
-                                ) : (
+                                if (match) {
+                                    // FIX: Extract ref to avoid type mismatch with SyntaxHighlighter
+                                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                                    const { ref, ...restNoRef } = rest as any;
+                                    return (
+                                        <SyntaxHighlighter
+                                            {...restNoRef}
+                                            PreTag="div"
+                                            children={String(children).replace(/\n$/, '')}
+                                            language={match[1]}
+                                            style={vscDarkPlus}
+                                            customStyle={{ margin: 0, borderRadius: '0.5rem', fontSize: '0.9em' }}
+                                        />
+                                    );
+                                }
+                                return (
                                   <code {...rest} className={className}>
                                     {children}
                                   </code>
@@ -216,8 +222,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
       {/* Input Area */}
       <div className="bg-[#131314] p-4 flex justify-center sticky bottom-0 z-20">
-         <div className="w-full max-w-3xl bg-[#1E1F20] rounded-full flex items-center px-4 py-3 gap-3 border border-transparent focus-within:border-[#444746] transition-colors shadow-lg">
-            <button className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors">
+         <div className="w-full max-w-3xl bg-[#1E1F20] rounded-full flex items-center px-4 py-3 gap-3 border border-transparent focus-within:border-[#444746] transition-all duration-200 shadow-lg hover:shadow-xl">
+            <button className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors transform active:scale-95">
                 <ImageUploadIcon />
             </button>
             <input 
@@ -229,20 +235,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
               className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] placeholder-[#C4C7C5] text-base"
               disabled={isSending}
             />
-            <button className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors">
+            <button className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors transform active:scale-95">
                <MicIcon />
             </button>
             {input.trim() && (
                 <button 
                   onClick={handleSend}
-                  className="p-2 bg-[#D3E3FD] hover:bg-white text-black rounded-full transition-colors animate-[fadeIn_0.2s_ease-out]"
+                  className="p-2 bg-[#D3E3FD] hover:bg-white text-black rounded-full transition-all duration-200 animate-[fadeIn_0.2s_ease-out] hover:scale-110 active:scale-95 shadow-md"
                 >
                     <SendIcon />
                 </button>
             )}
          </div>
       </div>
-      <div className="text-center pb-2 text-[10px] text-[#C4C7C5] bg-[#131314]">
+      <div className="text-center pb-2 text-[10px] text-[#C4C7C5] bg-[#131314] select-none">
          Gemini may display inaccurate info, including about people, so double-check its responses.
       </div>
     </div>
