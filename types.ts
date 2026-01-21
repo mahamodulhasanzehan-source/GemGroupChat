@@ -29,6 +29,8 @@ export interface Group {
   createdBy: string;
   createdAt: number;
   members: string[]; // array of UIDs
+  lockedBy?: string | null; // UID of user currently editing/prompting
+  lockedAt?: number;
 }
 
 export interface CanvasState {
@@ -37,6 +39,13 @@ export interface CanvasState {
   js: string;
   lastUpdated: number;
   terminalOutput: string[]; // For the terminal view
+}
+
+export interface Presence {
+    uid: string;
+    displayName: string;
+    lastActive: number;
+    isOnline: boolean;
 }
 
 export enum ViewState {

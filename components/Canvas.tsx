@@ -2,13 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CanvasState } from '../types';
+import { updateCanvas } from '../services/firebase';
 
 interface CanvasProps {
   canvasState: CanvasState;
+  groupId: string; // Needed for updates
 }
 
-const Canvas: React.FC<CanvasProps> = ({ canvasState }) => {
+const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'terminal'>('preview');
+  const [codeTab, setCodeTab] = useState<'html' | 'css' | 'js'>('html');
   const [compiledSrc, setCompiledSrc] = useState('');
 
   // Auto-compile when code changes
@@ -46,40 +49,56 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState }) => {
     setCompiledSrc(src);
   }, [canvasState]);
 
+  const handleCodeChange = (code: string) => {
+      // Create updates based on active code tab
+      const updates: any = {};
+      if (codeTab === 'html') updates.html = code;
+      if (codeTab === 'css') updates.css = code;
+      if (codeTab === 'js') updates.js = code;
+      
+      // Push update to DB (Debouncing handled by React state usually, but for firestore we want immediate local feel)
+      // For a production app, debounce this. Here we assume direct sync.
+      updateCanvas(groupId, updates);
+  };
+
+  const currentCode = canvasState[codeTab] || '';
+
   return (
     <div className="flex flex-col h-full bg-[#1E1F20] border-l border-[#444746]">
       {/* Tabs */}
-      <div className="flex items-center px-4 pt-2 border-b border-[#444746] bg-[#1E1F20]">
-        <button
-          onClick={() => setActiveTab('preview')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'preview'
-              ? 'border-[#4285F4] text-[#4285F4]'
-              : 'border-transparent text-[#C4C7C5] hover:text-[#E3E3E3]'
-          }`}
-        >
-          Preview
-        </button>
-        <button
-          onClick={() => setActiveTab('code')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'code'
-              ? 'border-[#4285F4] text-[#4285F4]'
-              : 'border-transparent text-[#C4C7C5] hover:text-[#E3E3E3]'
-          }`}
-        >
-          Code
-        </button>
-         <button
-          onClick={() => setActiveTab('terminal')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'terminal'
-              ? 'border-[#4285F4] text-[#4285F4]'
-              : 'border-transparent text-[#C4C7C5] hover:text-[#E3E3E3]'
-          }`}
-        >
-          Terminal
-        </button>
+      <div className="flex items-center justify-between px-4 pt-2 border-b border-[#444746] bg-[#1E1F20]">
+        <div className="flex">
+            <button
+            onClick={() => setActiveTab('preview')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'preview'
+                ? 'border-[#4285F4] text-[#4285F4]'
+                : 'border-transparent text-[#C4C7C5] hover:text-[#E3E3E3]'
+            }`}
+            >
+            Preview
+            </button>
+            <button
+            onClick={() => setActiveTab('code')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'code'
+                ? 'border-[#4285F4] text-[#4285F4]'
+                : 'border-transparent text-[#C4C7C5] hover:text-[#E3E3E3]'
+            }`}
+            >
+            Code
+            </button>
+            <button
+            onClick={() => setActiveTab('terminal')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'terminal'
+                ? 'border-[#4285F4] text-[#4285F4]'
+                : 'border-transparent text-[#C4C7C5] hover:text-[#E3E3E3]'
+            }`}
+            >
+            Terminal
+            </button>
+        </div>
       </div>
 
       {/* Content Area */}
@@ -102,58 +121,50 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState }) => {
             )}
         </div>
 
-        {/* Code Mode */}
-        <div className={`absolute inset-0 w-full h-full bg-[#1E1F20] overflow-auto transition-opacity duration-300 ${activeTab === 'code' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
-             <div className="flex flex-col gap-4 p-4">
-                 
-                 {/* HTML Block */}
-                 {canvasState.html && (
-                     <div className="rounded-lg border border-[#444746] overflow-hidden">
-                         <div className="bg-[#2D2E30] px-3 py-1 text-xs text-[#A8C7FA] font-mono border-b border-[#444746]">index.html</div>
-                         <SyntaxHighlighter
-                            language="html"
-                            style={vscDarkPlus}
-                            showLineNumbers={true}
-                            customStyle={{ margin: 0, fontSize: '13px', background: '#131314' }}
-                         >
-                            {canvasState.html}
-                         </SyntaxHighlighter>
-                     </div>
-                 )}
+        {/* Code Mode - Editable */}
+        <div className={`absolute inset-0 w-full h-full bg-[#1E1F20] flex flex-col transition-opacity duration-300 ${activeTab === 'code' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+             
+             {/* Language Tabs */}
+             <div className="flex bg-[#131314] border-b border-[#444746]">
+                 <button onClick={() => setCodeTab('html')} className={`px-4 py-1 text-xs font-mono border-r border-[#444746] ${codeTab === 'html' ? 'bg-[#2D2E30] text-[#A8C7FA]' : 'text-[#C4C7C5]'}`}>index.html</button>
+                 <button onClick={() => setCodeTab('css')} className={`px-4 py-1 text-xs font-mono border-r border-[#444746] ${codeTab === 'css' ? 'bg-[#2D2E30] text-[#ce9178]' : 'text-[#C4C7C5]'}`}>styles.css</button>
+                 <button onClick={() => setCodeTab('js')} className={`px-4 py-1 text-xs font-mono border-r border-[#444746] ${codeTab === 'js' ? 'bg-[#2D2E30] text-[#dcdcaa]' : 'text-[#C4C7C5]'}`}>script.js</button>
+             </div>
 
-                 {/* CSS Block */}
-                 {canvasState.css && (
-                     <div className="rounded-lg border border-[#444746] overflow-hidden">
-                         <div className="bg-[#2D2E30] px-3 py-1 text-xs text-[#ce9178] font-mono border-b border-[#444746]">styles.css</div>
-                         <SyntaxHighlighter
-                            language="css"
-                            style={vscDarkPlus}
-                            showLineNumbers={true}
-                            customStyle={{ margin: 0, fontSize: '13px', background: '#131314' }}
-                         >
-                            {canvasState.css}
-                         </SyntaxHighlighter>
-                     </div>
-                 )}
+             {/* Editor Area */}
+             <div className="relative flex-1 overflow-hidden">
+                 {/* Syntax Highlighter (Background) */}
+                 <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
+                    <SyntaxHighlighter
+                        language={codeTab === 'js' ? 'javascript' : codeTab}
+                        style={vscDarkPlus}
+                        showLineNumbers={true}
+                        customStyle={{ 
+                            margin: 0, 
+                            height: '100%', 
+                            background: '#131314', 
+                            fontSize: '14px', 
+                            lineHeight: '1.5',
+                            padding: '1rem',
+                        }}
+                        codeTagProps={{ style: { fontFamily: 'monospace' } }}
+                    >
+                        {currentCode || ' '}
+                    </SyntaxHighlighter>
+                 </div>
 
-                 {/* JS Block */}
-                 {canvasState.js && (
-                     <div className="rounded-lg border border-[#444746] overflow-hidden">
-                         <div className="bg-[#2D2E30] px-3 py-1 text-xs text-[#dcdcaa] font-mono border-b border-[#444746]">script.js</div>
-                         <SyntaxHighlighter
-                            language="javascript"
-                            style={vscDarkPlus}
-                            showLineNumbers={true}
-                            customStyle={{ margin: 0, fontSize: '13px', background: '#131314' }}
-                         >
-                            {canvasState.js}
-                         </SyntaxHighlighter>
-                     </div>
-                 )}
-                 
-                 {!canvasState.html && !canvasState.css && !canvasState.js && (
-                     <div className="text-[#C4C7C5] text-center mt-10">Canvas is empty.</div>
-                 )}
+                 {/* Editable Textarea (Foreground) */}
+                 <textarea
+                    value={currentCode}
+                    onChange={(e) => handleCodeChange(e.target.value)}
+                    spellCheck="false"
+                    className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-white resize-none outline-none p-4 font-mono text-sm leading-[1.5]"
+                    style={{ 
+                        zIndex: 1, 
+                        fontFamily: 'monospace', // Ensure alignment with syntax highlighter
+                        fontSize: '14px'
+                    }}
+                 />
              </div>
         </div>
 

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc } from 'firebase/firestore';
 
 // Hardcoded Configuration provided by user
 const firebaseConfig = {
@@ -31,6 +31,9 @@ let mockUsageListener: ((data: any) => void) | null = null;
 // Mock Canvas
 const mockCanvasDb: Record<string, any> = {};
 const mockCanvasListeners: Record<string, Function[]> = {};
+// Mock Presence
+const mockPresenceDb: Record<string, any> = {};
+const mockPresenceListeners: Record<string, Function[]> = {};
 
 try {
     app = initializeApp(firebaseConfig);
@@ -299,6 +302,42 @@ export const updateMessage = async (groupId: string, messageId: string, updates:
   await updateDoc(msgRef, updates);
 };
 
+// Delete Message
+export const deleteMessage = async (groupId: string, messageId: string) => {
+    // Offline Mode
+    if (!isConfigured || !db) {
+        if (mockDb[groupId]) {
+            const idx = mockDb[groupId].messages.findIndex((m: any) => m.id === messageId);
+            if (idx > -1) {
+                mockDb[groupId].messages.splice(idx, 1);
+                mockListeners[groupId]?.forEach(cb => cb(mockDb[groupId].messages));
+            }
+        }
+        return;
+    }
+
+    // Real Mode
+    const msgRef = doc(db, 'groups', groupId, 'messages', messageId);
+    await deleteDoc(msgRef);
+}
+
+// Group Locking (For exclusive editing)
+export const setGroupLock = async (groupId: string, userId: string | null) => {
+     if (!isConfigured || !db) {
+         if (mockDb[groupId]) {
+             mockDb[groupId].details.lockedBy = userId;
+             mockDb[groupId].details.lockedAt = Date.now();
+         }
+         return;
+     }
+
+     const groupRef = doc(db, 'groups', groupId);
+     await updateDoc(groupRef, {
+         lockedBy: userId,
+         lockedAt: Date.now()
+     });
+}
+
 // --- Canvas Functions ---
 
 export const subscribeToCanvas = (groupId: string, callback: (data: any) => void) => {
@@ -327,4 +366,47 @@ export const updateCanvas = async (groupId: string, updates: any) => {
 
     const docRef = doc(db, 'groups', groupId, 'canvas', 'current');
     await setDoc(docRef, data, { merge: true });
+};
+
+// --- Presence Functions ---
+
+export const updatePresence = async (groupId: string, user: any) => {
+    if (!user) return;
+    
+    if (!isConfigured || !db) {
+        if (!mockPresenceDb[groupId]) mockPresenceDb[groupId] = {};
+        mockPresenceDb[groupId][user.uid] = {
+            uid: user.uid,
+            displayName: user.displayName || 'Guest',
+            lastActive: Date.now(),
+            isOnline: true
+        };
+        mockPresenceListeners[groupId]?.forEach(cb => cb(Object.values(mockPresenceDb[groupId])));
+        return;
+    }
+
+    const presenceRef = doc(db, 'groups', groupId, 'presence', user.uid);
+    await setDoc(presenceRef, {
+        uid: user.uid,
+        displayName: user.displayName || 'Guest',
+        lastActive: Date.now(),
+        isOnline: true
+    }, { merge: true });
+};
+
+export const subscribeToPresence = (groupId: string, callback: (users: any[]) => void) => {
+    if (!isConfigured || !db) {
+        if (!mockPresenceListeners[groupId]) mockPresenceListeners[groupId] = [];
+        mockPresenceListeners[groupId].push(callback);
+        callback(Object.values(mockPresenceDb[groupId] || {}));
+        return () => {};
+    }
+
+    const q = query(collection(db, 'groups', groupId, 'presence'));
+    return onSnapshot(q, (snapshot) => {
+        const users = snapshot.docs.map(doc => doc.data());
+        // Simple filter: active in last 2 minutes
+        const onlineUsers = users.filter((u: any) => (Date.now() - u.lastActive) < 120000);
+        callback(onlineUsers);
+    });
 };
