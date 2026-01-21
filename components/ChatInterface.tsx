@@ -36,6 +36,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const [showOnlineUsers, setShowOnlineUsers] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Presence[]>([]);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  
+  // Local Hide State (Session based)
+  const [hiddenMessageIds, setHiddenMessageIds] = useState<Set<string>>(new Set());
 
   // Edit Mode State
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -86,16 +89,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       };
   }, [groupId, currentUser]);
 
-  // Extract Code Blocks helper
+  // Extract Single HTML Code Block
   const extractCode = (text: string) => {
+      // Look for ```html ... ``` block
       const htmlMatch = text.match(/```html\s*([\s\S]*?)(```|$)/i);
-      const cssMatch = text.match(/```css\s*([\s\S]*?)(```|$)/i);
-      const jsMatch = text.match(/```(javascript|js)\s*([\s\S]*?)(```|$)/i);
-      return {
-          html: htmlMatch ? htmlMatch[1] : null,
-          css: cssMatch ? cssMatch[1] : null,
-          js: jsMatch ? jsMatch[2] : null,
-      };
+      // Fallback: If no tag, but looks like HTML
+      const genericMatch = text.match(/```\s*([\s\S]*?)(```|$)/i);
+      
+      let code = null;
+      if (htmlMatch) {
+          code = htmlMatch[1];
+      } else if (genericMatch && (genericMatch[1].includes('<html') || genericMatch[1].includes('<!DOCTYPE'))) {
+          code = genericMatch[1];
+      }
+
+      return { html: code };
   };
 
   // --- Queue Processing Logic ---
@@ -148,8 +156,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             status: 'generating'
           });
 
-          // Build context from history (excluding queued messages)
-          // Filter out queued messages for the history context so AI doesn't see future
+          // Build context from history (excluding queued messages and hidden ones?)
+          // Usually AI should see all history even if hidden locally, but let's stick to visible for consistency
+          // Actually, consistency means ignoring 'queued' only.
           const validHistory = localMessages
                 .filter(m => m.status !== 'queued' && m.id !== userMsg.id) 
                 .map(m => ({
@@ -173,26 +182,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                   
                   // Live Code Parsing & Update
                   const codeUpdates = extractCode(accumulatedText);
-                  const updates: any = {};
-                  let hasUpdates = false;
-
+                  
                   if (codeUpdates.html && codeUpdates.html.length > canvasState.html.length) {
-                      updates.html = codeUpdates.html;
-                      hasUpdates = true;
-                  }
-                  if (codeUpdates.css && codeUpdates.css.length > canvasState.css.length) {
-                      updates.css = codeUpdates.css;
-                      hasUpdates = true;
-                  }
-                  if (codeUpdates.js && codeUpdates.js.length > canvasState.js.length) {
-                      updates.js = codeUpdates.js;
-                      hasUpdates = true;
-                  }
-
-                  if (hasUpdates) {
                        const now = Date.now();
                        if (now - lastUpdateTime > 500) {
-                           await updateCanvas(groupId, updates);
+                           await updateCanvas(groupId, { html: codeUpdates.html });
                        }
                   }
 
@@ -209,12 +203,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
           // Final Sync
           const finalCode = extractCode(accumulatedText);
-          if (finalCode.html || finalCode.css || finalCode.js) {
-              await updateCanvas(groupId, {
-                  html: finalCode.html || canvasState.html,
-                  css: finalCode.css || canvasState.css,
-                  js: finalCode.js || canvasState.js
-              });
+          if (finalCode.html) {
+              await updateCanvas(groupId, { html: finalCode.html });
           }
 
           // Complete
@@ -248,12 +238,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
     try {
         if (editingMessageId) {
-            // ... Edit logic (omitted for brevity, similar to before but handled queue status) ...
              await updateMessage(groupId, editingMessageId, { text: input });
              await setGroupLock(groupId, null);
              setEditingMessageId(null);
         } else {
-             // Just add to queue. The useEffect will pick it up.
             const userMsgId = Date.now().toString();
             await sendMessage(groupId, {
                 id: userMsgId,
@@ -284,17 +272,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       setInput(msg.text);
   };
 
-  const handleDelete = async (msgId: string) => {
-      if (confirm("Delete this prompt?")) {
-          await deleteMessage(groupId!, msgId);
+  const handleDelete = async (msg: Message) => {
+      if (msg.senderId === currentUser.uid) {
+           if (confirm("Permanently delete this prompt?")) {
+               await deleteMessage(groupId!, msg.id);
+           }
+      } else {
+           // Local Hide for others' prompts
+           setHiddenMessageIds(prev => new Set(prev).add(msg.id));
       }
   };
 
   const activeIndex = tokenUsage.activeKeyIndex || 0;
   const currentKeyUsage = tokenUsage[`key_${activeIndex}`] || 0;
   
-  // Filter messages for view
-  const visibleMessages = localMessages.filter(m => m.status !== 'queued');
+  // Filter messages for view (Remove queued and hidden)
+  const visibleMessages = localMessages.filter(m => m.status !== 'queued' && !hiddenMessageIds.has(m.id));
   const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
 
   return (
@@ -364,6 +357,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                 {visibleMessages.map((msg, index) => {
                 const isMe = msg.senderId === currentUser.uid;
                 const isGemini = msg.role === 'model';
+                
+                // Identify if this is the user's latest prompt
                 const myMessages = visibleMessages.filter(m => m.senderId === currentUser.uid);
                 const isMyLatest = myMessages.length > 0 && myMessages[myMessages.length - 1].id === msg.id;
 
@@ -374,63 +369,70 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                         onMouseEnter={() => setHoveredMessageId(msg.id)}
                         onMouseLeave={() => setHoveredMessageId(null)}
                     >
-                    <div className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center overflow-hidden border border-[#444746] ${isGemini ? 'bg-transparent' : 'bg-[#1E1F20]'}`}>
-                        {isGemini ? (
-                        <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" alt="AI" className="w-4 h-4 animate-[spin_10s_linear_infinite]" />
-                        ) : (
-                        <span className="text-[10px] text-white font-bold">{msg.senderName?.[0]?.toUpperCase() || 'U'}</span>
-                        )}
-                    </div>
+                        {/* Avatar */}
+                        <div className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center overflow-hidden border border-[#444746] ${isGemini ? 'bg-transparent' : 'bg-[#1E1F20]'}`}>
+                            {isGemini ? (
+                            <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" alt="AI" className="w-4 h-4 animate-[spin_10s_linear_infinite]" />
+                            ) : (
+                            <span className="text-[10px] text-white font-bold">{msg.senderName?.[0]?.toUpperCase() || 'U'}</span>
+                            )}
+                        </div>
                     
-                    <div className={`flex flex-col max-w-[90%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
-                        <div className={`prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}`}>
-                           <ReactMarkdown
-                                components={{
-                                code(props) {
-                                    const {children, className, node, ...rest} = props
-                                    const match = /language-(\w+)/.exec(className || '')
-                                    if (match) {
-                                        return (
-                                            <div className="my-1 p-2 bg-[#131314] border border-[#444746] rounded text-xs text-[#A8C7FA] font-mono flex items-center gap-2">
-                                                <span>📄 Parsing {match[1]} to Canvas...</span>
-                                            </div>
-                                        );
+                        {/* Message Content */}
+                        <div className={`flex flex-col max-w-[90%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
+                            <div className={`prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}`}>
+                            <ReactMarkdown
+                                    components={{
+                                    code(props) {
+                                        const {children, className, node, ...rest} = props
+                                        const match = /language-(\w+)/.exec(className || '')
+                                        if (match) {
+                                            return (
+                                                <div className="my-1 p-2 bg-[#131314] border border-[#444746] rounded text-xs text-[#A8C7FA] font-mono flex items-center gap-2">
+                                                    <span>📄 Parsing {match[1]} to Canvas...</span>
+                                                </div>
+                                            );
+                                        }
+                                        return <code {...rest} className={`${className} bg-[#333537] px-1 rounded text-xs`}>{children}</code>
                                     }
-                                    return <code {...rest} className={`${className} bg-[#333537] px-1 rounded text-xs`}>{children}</code>
-                                }
-                                }}
-                            >
-                                {msg.text}
-                            </ReactMarkdown>
+                                    }}
+                                >
+                                    {msg.text}
+                                </ReactMarkdown>
+                            </div>
                         </div>
-                    </div>
 
-                    {isMe && !isGemini && hoveredMessageId === msg.id && (
-                        <div className="absolute top-0 right-0 transform translate-x-full pl-2">
-                             <div className="relative group/menu">
-                                <button className="p-1 text-[#C4C7C5] hover:text-white hover:bg-[#333537] rounded">
-                                    <DotsHorizontalIcon />
-                                </button>
-                                <div className="absolute left-full top-0 ml-1 hidden group-hover/menu:block bg-[#1E1F20] border border-[#444746] rounded shadow-lg z-10 w-24">
-                                     {isMyLatest && (
-                                         <button 
-                                            onClick={() => handleEdit(msg)}
-                                            className="w-full text-left px-3 py-2 text-xs text-[#E3E3E3] hover:bg-[#333537] flex items-center gap-2"
-                                         >
-                                             <PencilIcon /> Edit
-                                         </button>
-                                     )}
-                                     <button 
-                                        onClick={() => handleDelete(msg.id)}
-                                        className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-[#333537] flex items-center gap-2"
-                                     >
-                                         <TrashIcon /> Delete
-                                     </button>
+                        {/* Action Menu (Fixed Visibility for everyone) */}
+                        {!isGemini && hoveredMessageId === msg.id && (
+                            <div className={`flex items-center opacity-0 group-hover:opacity-100 transition-opacity self-center ${isMe ? 'mr-1' : 'ml-1'}`}>
+                                <div className="relative group/menu">
+                                    <button className="p-1 text-[#C4C7C5] hover:text-white hover:bg-[#333537] rounded">
+                                        <DotsHorizontalIcon />
+                                    </button>
+                                    
+                                    {/* Dropdown positioned based on alignment */}
+                                    <div className={`absolute top-0 ${isMe ? 'right-full mr-1' : 'left-full ml-1'} bg-[#1E1F20] border border-[#444746] rounded shadow-lg z-10 w-24 overflow-hidden`}>
+                                        {/* Edit - Only for my latest prompt */}
+                                        {isMe && isMyLatest && (
+                                            <button 
+                                                onClick={() => handleEdit(msg)}
+                                                className="w-full text-left px-3 py-2 text-xs text-[#E3E3E3] hover:bg-[#333537] flex items-center gap-2"
+                                            >
+                                                <PencilIcon /> Edit
+                                            </button>
+                                        )}
+                                        
+                                        {/* Delete - Real delete for me, Hide for others */}
+                                        <button 
+                                            onClick={() => handleDelete(msg)}
+                                            className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-[#333537] flex items-center gap-2"
+                                        >
+                                            <TrashIcon /> {isMe ? 'Delete' : 'Hide'}
+                                        </button>
+                                    </div>
                                 </div>
-                             </div>
-                        </div>
-                    )}
-
+                            </div>
+                        )}
                     </div>
                 );
                 })}

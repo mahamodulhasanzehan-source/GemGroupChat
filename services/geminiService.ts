@@ -38,7 +38,13 @@ const getClient = (): GoogleGenAI => {
 const rotateKey = () => {
   currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
   console.warn(`[Gemini Service] Rotating to next key. New Index: ${currentKeyIndex}`);
+  // Force client recreation next time getClient is called
+  aiClient = null; 
+  activeKey = null;
 };
+
+// Delay helper for retries
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const streamGeminiResponse = async (
   prompt: string, 
@@ -52,7 +58,7 @@ export const streamGeminiResponse = async (
   }
 
   let attempts = 0;
-  const maxAttempts = API_KEYS.length; // Try every key once
+  const maxAttempts = API_KEYS.length * 2; // Try every key, allow a second pass if needed
   let success = false;
 
   // SYSTEM INSTRUCTION FOR CODING CANVAS
@@ -60,38 +66,22 @@ export const streamGeminiResponse = async (
   You are an expert full-stack web developer and coding assistant.
   
   CONTEXT:
-  You have access to a "Canvas" environment where you can write and update HTML, CSS, and JavaScript files.
-  The user can see the code editor, a live preview, and a terminal.
+  You have access to a "Canvas" environment that renders a SINGLE HTML file.
   
-  CURRENT CANVAS STATE:
-  HTML Length: ${canvasState?.html.length || 0}
-  CSS Length: ${canvasState?.css.length || 0}
-  JS Length: ${canvasState?.js.length || 0}
-  
-  HTML Content:
+  CURRENT CANVAS STATE (HTML):
   \`\`\`html
   ${canvasState?.html || '<!-- Empty -->'}
   \`\`\`
-  
-  CSS Content:
-  \`\`\`css
-  ${canvasState?.css || '/* Empty */'}
-  \`\`\`
-
-  JS Content:
-  \`\`\`javascript
-  ${canvasState?.js || '// Empty'}
-  \`\`\`
 
   INSTRUCTIONS:
-  1. If the user asks for code changes, DO NOT output the entire file unless necessary.
-  2. You can "internally break up" the code. Only output the specific code blocks (HTML, CSS, or JS) that need to be updated.
-  3. If you output a code block with \`html\`, \`css\`, or \`javascript\` language tags, the system will automatically update the Canvas.
-  4. Ensure your code is valid and syntax-correct.
-  5. Use the console/terminal concept by mentioning actions if needed, but primarily write code.
+  1. Write the COMPLETE functional application in a SINGLE \`html\` code block.
+  2. You MUST include your CSS inside \`<style>\` tags within the \`<head>\`.
+  3. You MUST include your JavaScript inside \`<script>\` tags within the \`<body>\`.
+  4. DO NOT output separate \`css\` or \`javascript\` blocks. Everything must be in one \`html\` file.
+  5. If updating existing code, you can output just the parts that change if you are clever, but usually outputting the full updated HTML block is safer to ensure consistency in this single-file mode.
+  6. Ensure the code is self-contained (no external local file references, use CDNs if needed).
   `;
 
-  // Prepare full contents for counting tokens
   const historyContents = history.map(h => ({
     role: h.role,
     parts: [{ text: h.text }]
@@ -103,7 +93,7 @@ export const streamGeminiResponse = async (
     try {
       const ai = getClient();
       
-      // 1. Track Input Tokens
+      // 1. Track Input Tokens (Optional/Best Effort)
       let inputTokens = 0;
       try {
         const countResult = await ai.models.countTokens({
@@ -112,7 +102,7 @@ export const streamGeminiResponse = async (
         });
         inputTokens = countResult.totalTokens ?? 0;
       } catch (countError) {
-          console.warn(`[Gemini Service] countTokens failed on key ${currentKeyIndex}`, countError);
+          // Ignore count error, proceed to generation
       }
 
       const chat = ai.chats.create({
@@ -146,11 +136,12 @@ export const streamGeminiResponse = async (
       if (usageMetadata) {
           totalTokens = usageMetadata.totalTokenCount;
       } else {
+          // Fallback estimation
           const outputTokens = Math.ceil(textAccumulated.length / 4);
           totalTokens = inputTokens + outputTokens;
       }
 
-      // Update usage AND the active key index so UI knows which key was used
+      // Update usage AND the active key index so UI knows which key was used successfully
       if (totalTokens > 0) {
           updateTokenUsage(currentKeyIndex, totalTokens);
       }
@@ -158,26 +149,36 @@ export const streamGeminiResponse = async (
       success = true;
 
     } catch (error: any) {
-      console.error(`Gemini API Error (Attempt ${attempts + 1}/${maxAttempts}):`, error);
+      console.error(`Gemini API Error (Attempt ${attempts + 1}/${maxAttempts} - KeyIdx ${currentKeyIndex}):`, error);
       
       const isRateLimit = error.message?.includes('429') || 
                           error.message?.includes('400') ||
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
+      
+      const isOverloaded = error.message?.includes('503') || 
+                           error.status === 503;
 
-      if (isRateLimit) {
-        attempts++;
-        if (attempts < maxAttempts) {
-          rotateKey();
-          continue;
-        }
+      attempts++;
+
+      // If rate limited or overloaded, try next key
+      if (isRateLimit || isOverloaded) {
+        rotateKey();
+        // Force update of token usage with 0 tokens just to update the activeKeyIndex in DB/UI
+        // This lets the user see that the system is trying a new key
+        updateTokenUsage(currentKeyIndex, 0); 
+        
+        await delay(1000); // Wait 1s before retry to be nice
+        continue;
       }
 
+      // If we ran out of attempts
       if (attempts >= maxAttempts) {
-         onChunk(`\n\n*Error: System overloaded. All API keys are currently rate-limited. Please try again in a minute.*`);
+         onChunk(`\n\n*Error: System exhausted. All ${API_KEYS.length} API keys are currently rate-limited or the system is overloaded. Please wait a moment.*`);
       } else {
-         onChunk(`\n\n*Error: ${error.message || 'Unknown Gemini API error'}*`);
-         success = true;
+         // Unknown error, but we'll try rotating anyway just in case it's key specific
+         rotateKey();
+         await delay(1000);
       }
     }
   }

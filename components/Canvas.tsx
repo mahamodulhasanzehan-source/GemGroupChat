@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CanvasState } from '../types';
@@ -6,62 +6,39 @@ import { updateCanvas } from '../services/firebase';
 
 interface CanvasProps {
   canvasState: CanvasState;
-  groupId: string; // Needed for updates
+  groupId: string;
 }
 
 const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'terminal'>('preview');
-  const [codeTab, setCodeTab] = useState<'html' | 'css' | 'js'>('html');
-  const [compiledSrc, setCompiledSrc] = useState('');
+  
+  // Refs for scroll sync
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const highlighterRef = useRef<HTMLDivElement>(null);
 
-  // Auto-compile when code changes
-  useEffect(() => {
-    const html = canvasState.html || '';
-    const css = canvasState.css ? `<style>${canvasState.css}</style>` : '';
-    const js = canvasState.js ? `<script>${canvasState.js}</script>` : '';
-    
-    // Inject scripts to handle errors in preview
-    const errorHandling = `
-      <script>
-        window.onerror = function(message, source, lineno, colno, error) {
-          window.parent.postMessage({type: 'console', log: 'Error: ' + message}, '*');
-        };
-        console.log = function(...args) {
-          window.parent.postMessage({type: 'console', log: args.join(' ')}, '*');
-        };
-      </script>
-    `;
-
-    const src = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          ${css}
-          ${errorHandling}
-        </head>
-        <body>
-          ${html}
-          ${js}
-        </body>
-      </html>
-    `;
-    setCompiledSrc(src);
-  }, [canvasState]);
+  // Auto-compile handled by the AI's single file output now.
+  // We just use canvasState.html directly as it contains style/script.
 
   const handleCodeChange = (code: string) => {
-      // Create updates based on active code tab
-      const updates: any = {};
-      if (codeTab === 'html') updates.html = code;
-      if (codeTab === 'css') updates.css = code;
-      if (codeTab === 'js') updates.js = code;
-      
-      // Push update to DB (Debouncing handled by React state usually, but for firestore we want immediate local feel)
-      // For a production app, debounce this. Here we assume direct sync.
-      updateCanvas(groupId, updates);
+      // Update only HTML field as we are in single-file mode
+      updateCanvas(groupId, { html: code });
   };
 
-  const currentCode = canvasState[codeTab] || '';
+  // Scroll Sync Handler
+  const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+      if (highlighterRef.current) {
+          highlighterRef.current.scrollTop = e.currentTarget.scrollTop;
+          highlighterRef.current.scrollLeft = e.currentTarget.scrollLeft;
+      }
+  };
+
+  // Shared styles to ensure perfect alignment
+  const editorStyle = {
+      fontFamily: '"Fira Code", "Consolas", "Monaco", "Andale Mono", "Ubuntu Mono", monospace',
+      fontSize: '14px',
+      lineHeight: '1.5',
+      padding: '1rem',
+  };
 
   return (
     <div className="flex flex-col h-full bg-[#1E1F20] border-l border-[#444746]">
@@ -106,63 +83,66 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId }) => {
         
         {/* Preview Mode */}
         <div className={`absolute inset-0 w-full h-full bg-white transition-opacity duration-300 ${activeTab === 'preview' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
-            {compiledSrc && (
+            {canvasState.html ? (
                 <iframe 
-                    srcDoc={compiledSrc}
+                    srcDoc={canvasState.html}
                     title="preview"
                     className="w-full h-full border-none"
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-modals"
                 />
-            )}
-            {(!canvasState.html && !canvasState.js) && (
+            ) : (
                 <div className="absolute inset-0 flex items-center justify-center text-gray-400">
                     No code to preview yet. Ask Gemini to create something!
                 </div>
             )}
         </div>
 
-        {/* Code Mode - Editable */}
+        {/* Code Mode - Editable (Single File) */}
         <div className={`absolute inset-0 w-full h-full bg-[#1E1F20] flex flex-col transition-opacity duration-300 ${activeTab === 'code' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
              
-             {/* Language Tabs */}
-             <div className="flex bg-[#131314] border-b border-[#444746]">
-                 <button onClick={() => setCodeTab('html')} className={`px-4 py-1 text-xs font-mono border-r border-[#444746] ${codeTab === 'html' ? 'bg-[#2D2E30] text-[#A8C7FA]' : 'text-[#C4C7C5]'}`}>index.html</button>
-                 <button onClick={() => setCodeTab('css')} className={`px-4 py-1 text-xs font-mono border-r border-[#444746] ${codeTab === 'css' ? 'bg-[#2D2E30] text-[#ce9178]' : 'text-[#C4C7C5]'}`}>styles.css</button>
-                 <button onClick={() => setCodeTab('js')} className={`px-4 py-1 text-xs font-mono border-r border-[#444746] ${codeTab === 'js' ? 'bg-[#2D2E30] text-[#dcdcaa]' : 'text-[#C4C7C5]'}`}>script.js</button>
+             {/* File Header */}
+             <div className="flex bg-[#131314] border-b border-[#444746] px-4 py-1">
+                 <span className="text-xs font-mono text-[#A8C7FA]">index.html (Single File Component)</span>
              </div>
 
              {/* Editor Area */}
              <div className="relative flex-1 overflow-hidden">
                  {/* Syntax Highlighter (Background) */}
-                 <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
+                 <div 
+                    ref={highlighterRef}
+                    className="absolute inset-0 pointer-events-none overflow-hidden" 
+                    style={{ zIndex: 0 }}
+                 >
                     <SyntaxHighlighter
-                        language={codeTab === 'js' ? 'javascript' : codeTab}
+                        language="html"
                         style={vscDarkPlus}
                         showLineNumbers={true}
+                        wrapLines={false} 
                         customStyle={{ 
+                            ...editorStyle,
                             margin: 0, 
-                            height: '100%', 
-                            background: '#131314', 
-                            fontSize: '14px', 
-                            lineHeight: '1.5',
-                            padding: '1rem',
+                            minHeight: '100%', 
+                            background: '#131314',
+                            overflow: 'hidden' 
                         }}
-                        codeTagProps={{ style: { fontFamily: 'monospace' } }}
+                        codeTagProps={{ style: { fontFamily: editorStyle.fontFamily } }}
                     >
-                        {currentCode || ' '}
+                        {canvasState.html || ' '}
                     </SyntaxHighlighter>
                  </div>
 
                  {/* Editable Textarea (Foreground) */}
                  <textarea
-                    value={currentCode}
+                    ref={textareaRef}
+                    value={canvasState.html || ''}
                     onChange={(e) => handleCodeChange(e.target.value)}
+                    onScroll={handleScroll}
                     spellCheck="false"
-                    className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-white resize-none outline-none p-4 font-mono text-sm leading-[1.5]"
+                    className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-white resize-none outline-none whitespace-pre"
                     style={{ 
+                        ...editorStyle,
                         zIndex: 1, 
-                        fontFamily: 'monospace', // Ensure alignment with syntax highlighter
-                        fontSize: '14px'
+                        overflow: 'auto', 
                     }}
                  />
              </div>
