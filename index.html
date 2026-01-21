@@ -44,18 +44,28 @@
   <script type="importmap">
 {
   "imports": {
-    "firebase/": "https://esm.sh/firebase@10.8.0/",
+    "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+    "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
+    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js",
     "react-markdown": "https://esm.sh/react-markdown@9.0.1",
     "react/": "https://esm.sh/react@18.2.0/",
     "react": "https://esm.sh/react@18.2.0",
     "@google/genai": "https://esm.sh/@google/genai",
     "react-dom/": "https://esm.sh/react-dom@18.2.0/",
-    "react-router-dom": "https://esm.sh/react-router-dom@6.22.1"
+    "react-router-dom": "https://esm.sh/react-router-dom@6.22.1",
+    "firebase/": "https://esm.sh/firebase@^12.8.0/"
   }
 }
+</script>
+<script>
+  // Polyfill process.env for browser environments if not handled by bundler
+  if (typeof process === 'undefined') {
+    window.process = { env: {} };
+  }
 </script>
 </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>
