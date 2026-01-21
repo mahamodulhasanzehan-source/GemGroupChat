@@ -21,7 +21,7 @@ const LoginPage = () => {
             <div className="w-full space-y-4">
                 <button 
                     onClick={signInWithGoogle}
-                    className="w-full bg-[#A8C7FA] text-[#004A77] py-3 rounded-full font-medium text-sm hover:bg-[#D3E3FD] transition-all duration-200 flex items-center justify-center gap-2 group"
+                    className="w-full bg-[#D3E3FD] text-[#004A77] py-3 rounded-full font-medium text-sm hover:bg-white transition-all duration-200 flex items-center justify-center gap-2 group shadow-[0_0_15px_rgba(211,227,253,0.3)]"
                 >
                     <svg className="w-5 h-5" viewBox="0 0 24 24">
                         <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -50,7 +50,7 @@ const LoginPage = () => {
             </div>
             
             <p className="text-xs text-[#C4C7C5] max-w-[250px]">
-                By continuing, you agree to experience the Gemini 3 Pro Preview model in a cloned interface.
+                By continuing, you agree to experience the Gemini 3 Flash Preview model in a cloned interface.
             </p>
         </div>
     </div>

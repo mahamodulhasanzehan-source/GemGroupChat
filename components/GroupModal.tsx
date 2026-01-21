@@ -1,17 +1,37 @@
-import React, { useState } from 'react';
-import { createGroup, isConfigured } from '../services/firebase';
+import React, { useState, useEffect } from 'react';
+import { createGroup, isConfigured, getGroupDetails } from '../services/firebase';
 
 interface GroupModalProps {
   isOpen: boolean;
+  mode?: 'create' | 'join';
   onClose: () => void;
   currentUser: any;
 }
 
-const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser }) => {
-  const [step, setStep] = useState<'create' | 'share'>('create');
+const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClose, currentUser }) => {
+  const [activeTab, setActiveTab] = useState<'create' | 'join'>(mode);
+  const [step, setStep] = useState<'input' | 'share'>('input');
+  
+  // Create State
   const [groupName, setGroupName] = useState('');
+  
+  // Join State
+  const [joinGroupId, setJoinGroupId] = useState('');
+  
   const [shareLink, setShareLink] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+        setActiveTab(mode);
+        setStep('input');
+        setGroupName('');
+        setJoinGroupId('');
+        setError('');
+        setShareLink('');
+    }
+  }, [isOpen, mode]);
 
   if (!isOpen) return null;
 
@@ -25,9 +45,36 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
       setStep('share');
     } catch (error) {
       console.error("Failed to create group", error);
-      alert("Failed to create group. Please try again.");
+      setError("Failed to create group. Please try again.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleJoin = async () => {
+    if (!joinGroupId.trim()) return;
+    setIsLoading(true);
+    setError('');
+    
+    // Extract ID from URL if full URL provided
+    let targetId = joinGroupId.trim();
+    if (targetId.includes('/group/')) {
+        targetId = targetId.split('/group/')[1];
+    }
+
+    try {
+        // Validate group exists (mock or real)
+        const details = await getGroupDetails(targetId);
+        if (details) {
+            window.location.hash = `/group/${targetId}`;
+            onClose();
+        } else {
+            setError("Group not found.");
+        }
+    } catch (e) {
+        setError("Error joining group.");
+    } finally {
+        setIsLoading(false);
     }
   };
 
@@ -39,31 +86,32 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
       <div className="bg-[#1E1F20] border border-[#444746] rounded-2xl w-full max-w-md p-6 shadow-2xl relative overflow-hidden">
         
-        {/* Header */}
-        <div className="mb-6">
-          <h2 className="text-xl font-medium text-[#E3E3E3]">
-            {step === 'create' ? 'Create a New Group' : 'Invite Guests'}
-          </h2>
-          <p className="text-sm text-[#C4C7C5] mt-1">
-            {step === 'create' ? 'Start a collaborative chat session.' : 'Share this link to let others join as guests.'}
-          </p>
-          {!isConfigured && (
-              <p className="text-xs text-yellow-500 mt-2 bg-yellow-900/20 p-2 rounded border border-yellow-700/50">
-                  Note: Database not configured. Groups will not persist after reload in this preview.
-              </p>
-          )}
+        {/* Tabs */}
+        <div className="flex space-x-6 mb-6 border-b border-[#444746] pb-2">
+            <button 
+                onClick={() => { setActiveTab('create'); setStep('input'); }}
+                className={`text-sm font-medium pb-2 transition-colors ${activeTab === 'create' ? 'text-[#A8C7FA] border-b-2 border-[#A8C7FA]' : 'text-[#C4C7C5]'}`}
+            >
+                Create Group
+            </button>
+            <button 
+                onClick={() => { setActiveTab('join'); setStep('input'); }}
+                className={`text-sm font-medium pb-2 transition-colors ${activeTab === 'join' ? 'text-[#A8C7FA] border-b-2 border-[#A8C7FA]' : 'text-[#C4C7C5]'}`}
+            >
+                Join Group
+            </button>
         </div>
 
         {/* Content */}
-        {step === 'create' ? (
+        {activeTab === 'create' && step === 'input' && (
            <div className="space-y-4">
+              <p className="text-sm text-[#C4C7C5]">Enter a name for your new group session.</p>
               <div>
-                <label className="block text-xs font-medium text-[#C4C7C5] mb-1">Group Name</label>
                 <input 
                   type="text" 
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="Project Alpha Brainstorm"
+                  placeholder="e.g. Project Alpha"
                   className="w-full bg-[#131314] border border-[#444746] rounded-lg p-3 text-[#E3E3E3] focus:border-[#A8C7FA] focus:outline-none transition-colors"
                 />
               </div>
@@ -79,16 +127,18 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
                   disabled={!groupName.trim() || isLoading}
                   className="flex-1 py-2 rounded-full bg-[#A8C7FA] text-[#004A77] hover:bg-[#D3E3FD] transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isLoading ? 'Creating...' : 'Create Group'}
+                  {isLoading ? 'Creating...' : 'Create'}
                 </button>
               </div>
            </div>
-        ) : (
+        )}
+
+        {activeTab === 'create' && step === 'share' && (
            <div className="space-y-6">
+             <p className="text-sm text-[#C4C7C5]">Share this link with others to invite them.</p>
              <div className="bg-[#131314] border border-[#444746] rounded-lg p-4 break-all text-sm text-[#A8C7FA] font-mono select-all">
                 {shareLink}
              </div>
-             
              <div className="flex gap-3">
                <button 
                   onClick={handleCopy}
@@ -103,10 +153,49 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
                   }}
                   className="flex-1 py-2 rounded-full bg-[#A8C7FA] text-[#004A77] hover:bg-[#D3E3FD] transition-colors font-medium text-sm"
                >
-                 Go to Group
+                 Enter Group
                </button>
              </div>
            </div>
+        )}
+
+        {activeTab === 'join' && (
+           <div className="space-y-4">
+               <p className="text-sm text-[#C4C7C5]">Paste the group link or ID to join an existing session.</p>
+               <div>
+                <input 
+                  type="text" 
+                  value={joinGroupId}
+                  onChange={(e) => setJoinGroupId(e.target.value)}
+                  placeholder="https://... or group-id"
+                  className="w-full bg-[#131314] border border-[#444746] rounded-lg p-3 text-[#E3E3E3] focus:border-[#A8C7FA] focus:outline-none transition-colors"
+                />
+               </div>
+               {error && <p className="text-xs text-red-400">{error}</p>}
+               <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={onClose}
+                  className="flex-1 py-2 rounded-full text-[#A8C7FA] hover:bg-[#333537] transition-colors font-medium text-sm"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleJoin}
+                  disabled={!joinGroupId.trim() || isLoading}
+                  className="flex-1 py-2 rounded-full bg-[#A8C7FA] text-[#004A77] hover:bg-[#D3E3FD] transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? 'Joining...' : 'Join'}
+                </button>
+               </div>
+           </div>
+        )}
+
+        {!isConfigured && (
+            <div className="mt-4 pt-4 border-t border-[#444746]">
+                <p className="text-xs text-yellow-500 bg-yellow-900/10 p-2 rounded">
+                    Preview Mode: Groups are temporary and stored in memory.
+                </p>
+            </div>
         )}
       </div>
     </div>

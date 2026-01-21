@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 // Mapping Vercel/Screenshot Env Vars to Firebase Config
 const firebaseConfig = {
@@ -18,9 +18,12 @@ let db: any;
 let googleProvider: any;
 let isConfigured = false;
 
-// Mock Auth State for Preview/Skip Mode when Firebase is missing
+// --- Mock Data Store for Preview Mode ---
 let mockUser: any = null;
 const authListeners: ((user: any) => void)[] = [];
+// Mock DB Structure: { groupId: { details: {}, messages: [] } }
+const mockDb: Record<string, any> = {}; 
+const groupListeners: Record<string, Function[]> = {};
 
 try {
   if (firebaseConfig.apiKey) {
@@ -38,21 +41,18 @@ try {
 
 export { auth, db, googleProvider, isConfigured };
 
-// Notify mock listeners
+// --- Auth Functions ---
+
 const notifyMockListeners = () => {
   authListeners.forEach(listener => listener(mockUser));
 };
 
-// Unified Auth Subscription (Handles both Real Firebase and Mock)
 export const subscribeToAuth = (callback: (user: any) => void) => {
   if (isConfigured && auth) {
     return onAuthStateChanged(auth, callback);
   } else {
-    // Immediate callback with current mock state
     callback(mockUser);
-    // Subscribe
     authListeners.push(callback);
-    // Unsubscribe function
     return () => {
       const index = authListeners.indexOf(callback);
       if (index > -1) authListeners.splice(index, 1);
@@ -80,7 +80,6 @@ export const signInGuest = async () => {
       console.error("Error signing in anonymously", error);
     }
   } else {
-    // Mock Guest Login
     mockUser = {
       uid: 'guest-' + Date.now().toString().slice(-6),
       displayName: 'Guest User',
@@ -95,18 +94,27 @@ export const signOut = async () => {
   if (isConfigured && auth) {
     await firebaseSignOut(auth);
   } else {
-    // Mock Sign Out
     mockUser = null;
     notifyMockListeners();
   }
 };
 
-// Firestore Helpers for Groups
+// --- Group & Message Functions ---
+
 export const createGroup = async (name: string, creatorId: string): Promise<string> => {
   if (!isConfigured || !db) {
-    // Return a mock ID for UI preview
-    console.warn("Database not configured. Using Mock Group ID.");
-    return 'mock-group-' + Date.now();
+    const mockId = 'mock-group-' + Date.now();
+    mockDb[mockId] = {
+        details: {
+            id: mockId,
+            name,
+            createdBy: creatorId,
+            createdAt: Date.now(),
+            members: [creatorId]
+        },
+        messages: []
+    };
+    return mockId;
   }
   
   const groupRef = await addDoc(collection(db, 'groups'), {
@@ -118,24 +126,9 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
   return groupRef.id;
 };
 
-export const joinGroup = async (groupId: string, userId: string) => {
-  if (!isConfigured || !db) return;
-  // meaningful logic would go here to add user to members array
-};
-
 export const getGroupDetails = async (groupId: string) => {
   if (!isConfigured || !db) {
-    // Return mock details if in preview mode
-    if (groupId.startsWith('mock-group')) {
-        return {
-            id: groupId,
-            name: 'Mock Group Session',
-            createdBy: 'mock-user',
-            createdAt: Date.now(),
-            members: []
-        };
-    }
-    return null;
+    return mockDb[groupId]?.details || null;
   }
   const docRef = doc(db, 'groups', groupId);
   const docSnap = await getDoc(docRef);
@@ -143,4 +136,67 @@ export const getGroupDetails = async (groupId: string) => {
     return { id: docSnap.id, ...docSnap.data() };
   }
   return null;
+};
+
+// Real-time Message Subscription
+export const subscribeToMessages = (groupId: string, callback: (messages: any[]) => void) => {
+  if (!isConfigured || !db) {
+    // Mock Subscription
+    if (!groupListeners[groupId]) groupListeners[groupId] = [];
+    groupListeners[groupId].push(callback);
+    
+    // Initial Call
+    const messages = mockDb[groupId]?.messages || [];
+    callback(messages);
+
+    return () => {
+        const idx = groupListeners[groupId]?.indexOf(callback);
+        if (idx !== undefined && idx > -1) groupListeners[groupId].splice(idx, 1);
+    };
+  }
+
+  const q = query(
+    collection(db, 'groups', groupId, 'messages'), 
+    orderBy('timestamp', 'asc')
+  );
+
+  return onSnapshot(q, (snapshot) => {
+    const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    callback(msgs);
+  });
+};
+
+// Send Message
+export const sendMessage = async (groupId: string, message: any) => {
+  const msgData = {
+      ...message,
+      timestamp: Date.now() // Ensure server timestamp logic if needed
+  };
+
+  if (!isConfigured || !db) {
+    // Mock Send
+    if (!mockDb[groupId]) return;
+    mockDb[groupId].messages.push(msgData);
+    // Notify listeners
+    groupListeners[groupId]?.forEach(cb => cb(mockDb[groupId].messages));
+    return;
+  }
+
+  await setDoc(doc(db, 'groups', groupId, 'messages', message.id), msgData);
+};
+
+// Update Message (for streaming chunks)
+export const updateMessage = async (groupId: string, messageId: string, updates: any) => {
+  if (!isConfigured || !db) {
+     if (!mockDb[groupId]) return;
+     const msg = mockDb[groupId].messages.find((m: any) => m.id === messageId);
+     if (msg) {
+         Object.assign(msg, updates);
+         groupListeners[groupId]?.forEach(cb => cb(mockDb[groupId].messages));
+     }
+     return;
+  }
+
+  const msgRef = doc(db, 'groups', groupId, 'messages', messageId);
+  await updateDoc(msgRef, updates);
 };

@@ -1,4 +1,4 @@
-export const GEMINI_MODEL = 'gemini-3-pro-preview';
+export const GEMINI_MODEL = 'gemini-3-flash-preview';
 
 // Fallback images
 export const DEFAULT_AVATAR = 'https://picsum.photos/100/100';
