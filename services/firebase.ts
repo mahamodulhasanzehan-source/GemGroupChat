@@ -36,6 +36,8 @@ const mockPresenceDb: Record<string, any> = {};
 const mockPresenceListeners: Record<string, Function[]> = {};
 // Mock User Groups Listener
 const mockUserGroupsListeners: ((groups: any) => void)[] = [];
+// Mock System Config
+let mockSystemConfig: any = { globalCooldownUntil: 0 };
 
 try {
     app = initializeApp(firebaseConfig);
@@ -142,7 +144,7 @@ export const signOut = async () => {
   }
 };
 
-// --- Token Usage Functions ---
+// --- Token Usage & System Config Functions ---
 
 export const subscribeToTokenUsage = (callback: (data: any) => void) => {
     if (!isConfigured || !db) {
@@ -170,11 +172,36 @@ export const updateTokenUsage = async (keyIndex: number, totalTokens: number) =>
 
     const docRef = doc(db, 'system', 'token_usage');
     // Using setDoc with merge to ensure document exists, using increment for atomic updates
+    // This handles the requirement: "Save usage data to Firestore to track totals across sessions."
     await setDoc(docRef, {
         [keyField]: increment(totalTokens),
         activeKeyIndex: keyIndex
     }, { merge: true });
 };
+
+// Get Global Cooldown Status
+export const getSystemConfig = async () => {
+    if (!isConfigured || !db) {
+        return mockSystemConfig;
+    }
+    const docRef = doc(db, 'system', 'config');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+        return docSnap.data();
+    }
+    return { globalCooldownUntil: 0 };
+};
+
+// Set Global Cooldown
+export const setSystemCooldown = async (untilTimestamp: number) => {
+    if (!isConfigured || !db) {
+        mockSystemConfig.globalCooldownUntil = untilTimestamp;
+        return;
+    }
+    const docRef = doc(db, 'system', 'config');
+    await setDoc(docRef, { globalCooldownUntil: untilTimestamp }, { merge: true });
+};
+
 
 // --- Group & Message Functions ---
 

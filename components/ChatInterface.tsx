@@ -109,6 +109,44 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       return { html: code };
   };
 
+  // --- Optimization Logic: Sliding Window + Heuristic Summary ---
+  const prepareOptimizedHistory = (allMessages: Message[], currentMsgId: string) => {
+      // 1. Filter out queued/generating/hidden/current messages
+      const fullHistory = allMessages
+        .filter(m => m.status !== 'queued' && m.id !== currentMsgId && !hiddenMessageIds.has(m.id))
+        .map(m => ({
+            role: m.role as 'user' | 'model',
+            text: m.role === 'user' ? `[${m.senderName}]: ${m.text}` : m.text,
+            originalText: m.text // keep for summarization check
+        }));
+
+      // 2. Sliding Window: Keep last 10 messages
+      const MAX_HISTORY = 10;
+      
+      if (fullHistory.length <= MAX_HISTORY) {
+          return fullHistory.map(m => ({ role: m.role, text: m.text }));
+      }
+
+      // 3. Slice the last N
+      const recentHistory = fullHistory.slice(-MAX_HISTORY);
+      const olderHistory = fullHistory.slice(0, -MAX_HISTORY);
+
+      // 4. Heuristic Summary for Older Context
+      // Since we can't use AI to summarize without cost, we use the first few user prompts to set the "topic"
+      const firstUserMsg = olderHistory.find(m => m.role === 'user');
+      const topic = firstUserMsg ? firstUserMsg.originalText.substring(0, 150) + "..." : "General Project";
+      
+      const summaryMsg = {
+          role: 'model' as const,
+          text: `[SYSTEM OPTIMIZATION]: The conversation history has been truncated. 
+          Summary of older context: The discussion started with the topic "${topic}". 
+          ${olderHistory.length} older messages were omitted to save tokens.`
+      };
+
+      return [summaryMsg, ...recentHistory.map(m => ({ role: m.role, text: m.text }))];
+  };
+
+
   // --- Queue Processing Logic ---
   useEffect(() => {
       // Check if I am the "owner" of the next queued message
@@ -175,13 +213,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             status: 'generating'
           });
 
-          // Build context from history (excluding queued messages and hidden ones?)
-          const validHistory = localMessages
-                .filter(m => m.status !== 'queued' && m.id !== userMsg.id) 
-                .map(m => ({
-                    role: m.role as 'user' | 'model',
-                    text: m.role === 'user' ? `[${m.senderName}]: ${m.text}` : m.text
-                }));
+          // Build context using Optimized Sliding Window
+          const validHistory = prepareOptimizedHistory(localMessages, userMsg.id);
           
           // Add current prompt
           validHistory.push({ role: 'user', text: `[${userMsg.senderName}]: ${userMsg.text}` });

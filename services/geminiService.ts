@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
-import { updateTokenUsage } from "./firebase";
+import { updateTokenUsage, getSystemConfig, setSystemCooldown } from "./firebase";
 import { CanvasState } from "../types";
 
 // 1. Define Keys Array
@@ -54,6 +54,14 @@ export const streamGeminiResponse = async (
 ) => {
   if (API_KEYS.length === 0) {
       onChunk(`⚠️ **Configuration Error**: No \`GEMINI_API_KEY_x\` found in Environment Variables.`);
+      return;
+  }
+
+  // GLOBAL CIRCUIT BREAKER CHECK
+  const config = await getSystemConfig();
+  if (config.globalCooldownUntil > Date.now()) {
+      const waitSeconds = Math.ceil((config.globalCooldownUntil - Date.now()) / 1000);
+      onChunk(`⚠️ **System Cooldown**: All API keys are currently rate-limited. Please wait ${waitSeconds} seconds.`);
       return;
   }
 
@@ -163,14 +171,22 @@ export const streamGeminiResponse = async (
 
       attempts++;
 
-      // If rate limited, overloaded, or forbidden, try next key
-      if (isRateLimit || isOverloaded || isForbidden) {
+      // If rate limited, trigger GLOBAL COOL DOWN
+      if (isRateLimit) {
+           console.warn("429 Encountered. Triggering Project-Wide Cooldown.");
+           // Set a 60 second cooldown for ALL clients listening to DB
+           await setSystemCooldown(Date.now() + 60000);
+           
+           onChunk(`⚠️ **Rate Limit Hit**: A 429 error occurred. System entering 60s cooldown.`);
+           success = false; // Stop loop
+           return;
+      }
+
+      // If overloaded or forbidden, try next key
+      if (isOverloaded || isForbidden) {
         rotateKey();
-        // Force update of token usage with 0 tokens just to update the activeKeyIndex in DB/UI
-        // This lets the user see that the system is trying a new key
         updateTokenUsage(currentKeyIndex, 0); 
-        
-        await delay(1000); // Wait 1s before retry to be nice
+        await delay(1000); 
         continue;
       }
 
@@ -178,7 +194,6 @@ export const streamGeminiResponse = async (
       if (attempts >= maxAttempts) {
          onChunk(`\n\n*Error: System exhausted. All ${API_KEYS.length} API keys are currently rate-limited or the system is overloaded. Please wait a moment.*`);
       } else {
-         // Unknown error, but we'll try rotating anyway just in case it's key specific
          rotateKey();
          await delay(1000);
       }
