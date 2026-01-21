@@ -9,6 +9,7 @@ const API_KEYS = [
   process.env.GEMINI_API_KEY_2,
   process.env.GEMINI_API_KEY_3,
   process.env.GEMINI_API_KEY_4,
+  process.env.GEMINI_API_KEY_5,
   process.env.API_KEY // Fallback to generic key
 ].filter(Boolean) as string[];
 
@@ -51,7 +52,7 @@ export const streamGeminiResponse = async (
   history: { role: 'user' | 'model', text: string }[],
   canvasState: CanvasState | null,
   onChunk: (text: string) => void,
-  signal?: AbortSignal // NEW: Support for aborting
+  signal?: AbortSignal
 ) => {
   if (API_KEYS.length === 0) {
       onChunk(`⚠️ **Configuration Error**: No \`GEMINI_API_KEY_x\` found in Environment Variables.`);
@@ -66,8 +67,10 @@ export const streamGeminiResponse = async (
       return;
   }
 
+  // Max attempts = number of keys. We try each key exactly once per request.
+  // If all keys fail, we stop. We do not loop endlessly.
   let attempts = 0;
-  const maxAttempts = API_KEYS.length * 2; // Try every key, allow a second pass if needed
+  const maxAttempts = API_KEYS.length; 
   let success = false;
 
   // SYSTEM INSTRUCTION FOR CODING CANVAS
@@ -99,7 +102,7 @@ export const streamGeminiResponse = async (
   const fullContents = [...historyContents, currentContent];
 
   while (attempts < maxAttempts && !success) {
-    // Check abort signal at start of loop
+    // 1. Check Abort Signal immediately
     if (signal?.aborted) {
         throw new Error("Aborted by user");
     }
@@ -107,7 +110,7 @@ export const streamGeminiResponse = async (
     try {
       const ai = getClient();
       
-      // 1. Track Input Tokens (Optional/Best Effort)
+      // Optional: Input Token Check (Silent fail)
       let inputTokens = 0;
       try {
         const countResult = await ai.models.countTokens({
@@ -115,9 +118,7 @@ export const streamGeminiResponse = async (
             contents: fullContents
         });
         inputTokens = countResult.totalTokens ?? 0;
-      } catch (countError) {
-          // Ignore count error, proceed to generation
-      }
+      } catch (countError) {}
 
       const chat = ai.chats.create({
         model: GEMINI_MODEL,
@@ -148,64 +149,63 @@ export const streamGeminiResponse = async (
          }
       }
 
-      // 2. Calculate Total Usage and Update DB
+      // Success! Calculate Usage
       let totalTokens = 0;
       if (usageMetadata) {
           totalTokens = usageMetadata.totalTokenCount;
       } else {
-          // Fallback estimation
           const outputTokens = Math.ceil(textAccumulated.length / 4);
           totalTokens = inputTokens + outputTokens;
       }
 
-      // Update usage AND the active key index so UI knows which key was used successfully
       if (totalTokens > 0) {
+          // Only update usage on SUCCESS.
           updateTokenUsage(currentKeyIndex, totalTokens);
       }
 
-      success = true;
+      success = true; // Break the loop
 
     } catch (error: any) {
       if (error.message === "Aborted by user" || signal?.aborted) {
           throw error; // Re-throw aborts to exit immediately
       }
 
-      console.error(`Gemini API Error (Attempt ${attempts + 1}/${maxAttempts} - KeyIdx ${currentKeyIndex}):`, error);
+      attempts++;
+      console.error(`Gemini API Error (KeyIdx ${currentKeyIndex}):`, error.message);
       
       const isRateLimit = error.message?.includes('429') || 
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
       
-      const isOverloaded = error.message?.includes('503') || 
-                           error.status === 503;
-      
+      const isOverloaded = error.message?.includes('503') || error.status === 503;
       const isForbidden = error.message?.includes('403') || error.status === 403;
-
-      attempts++;
+      // Key not found or invalid
+      const isKeyError = error.message?.includes('API key not valid') || error.message?.includes('key not found');
 
       if (isRateLimit) {
            console.warn("429 Encountered. Triggering Project-Wide Cooldown.");
            await setSystemCooldown(Date.now() + 60000);
            onChunk(`⚠️ **Rate Limit Hit**: A 429 error occurred. System entering 60s cooldown.`);
-           success = false; // Stop loop, but consider it "handled" so we don't rotate pointlessly
-           return; 
+           return; // Stop trying other keys, the project is rate limited.
       }
 
-      if (isOverloaded || isForbidden) {
+      // If it's a specific error that warrants trying another key
+      if (isOverloaded || isForbidden || isKeyError) {
         rotateKey();
-        updateTokenUsage(currentKeyIndex, 0); 
-        await delay(1000); 
+        // Do NOT updateTokenUsage(0) here, it messes up the stats.
+        
+        // Add a delay to prevent rapid strobing
+        await delay(1500); 
         continue;
       }
 
-      // If we ran out of attempts or it's a generic error
-      if (attempts >= maxAttempts) {
-         onChunk(`\n\n*Error: System exhausted or unknown error. All keys tried. (Last error: ${error.message})*`);
-         return; // Exit function so we don't cycle infinitely
-      } else {
-         rotateKey();
-         await delay(1000);
-      }
+      // If it's a completely unknown error (e.g. 400 Bad Request on prompt), stop.
+      onChunk(`\n\n*Error: ${error.message}*`);
+      return;
     }
+  }
+
+  if (!success && !signal?.aborted) {
+      onChunk(`\n\n*System Exhausted: Tried all ${maxAttempts} available API keys without success.*`);
   }
 };

@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
       'process.env.GEMINI_API_KEY_2': JSON.stringify(env.GEMINI_API_KEY_2),
       'process.env.GEMINI_API_KEY_3': JSON.stringify(env.GEMINI_API_KEY_3),
       'process.env.GEMINI_API_KEY_4': JSON.stringify(env.GEMINI_API_KEY_4),
+      'process.env.GEMINI_API_KEY_5': JSON.stringify(env.GEMINI_API_KEY_5),
       // Keep existing keys if necessary, or generic API_KEY
       'process.env.API_KEY': JSON.stringify(env.API_KEY),
     },

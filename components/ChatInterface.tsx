@@ -77,9 +77,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           setGroupDetails(details);
           // Check if processing was stopped externally
           if (details && details.processingMessageId === null && abortControllerRef.current) {
-               // Someone (or me) cleared the processing ID, so we abort
+               console.log("Processing ID cleared externally, aborting local generation.");
                abortControllerRef.current.abort();
                abortControllerRef.current = null;
+               setIsSending(false);
+               processingRef.current = null;
           }
       });
       const unsubscribeMsgs = subscribeToMessages(groupId, (msgs) => setLocalMessages(msgs));
@@ -253,6 +255,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           if (e.message === "Aborted by user" || e.name === "AbortError") {
               // Update status to indicate stopped
               await updateMessage(groupId, userMsg.id, { status: 'done', text: userMsg.text + " [Stopped]" });
+          } else {
+             await updateMessage(groupId, userMsg.id, { status: 'done', text: userMsg.text + ` [Error: ${e.message}]` });
           }
           await updateGroup(groupId, { processingMessageId: null });
       } finally {
@@ -266,8 +270,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   // Shared Stop Action
   const handleStop = async () => {
       if (!groupId) return;
-      // Clear the processing lock in DB. 
-      // The person running the generation (via useEffect above) will see this and abort their controller.
+      console.log("Stop requested by user");
+      
+      // 1. Abort locally immediately if I am the one generating
+      if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          abortControllerRef.current = null;
+      }
+
+      // 2. Clear the processing lock in DB so everyone knows it stopped
       await updateGroup(groupId, { processingMessageId: null });
       setIsSending(false);
   };
@@ -385,8 +396,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                     <div className="bg-[#333537] text-[#A8C7FA] px-2 py-1 border-r border-[#444746]">
                         Key {activeIndex + 1}
                     </div>
+                    {/* Updated to remove " / 1M" based on user feedback */}
                     <div className="text-[#C4C7C5] px-2 py-1">
-                        {formatTokenCount(currentKeyUsage)}
+                        Tokens: {formatTokenCount(currentKeyUsage)}
                     </div>
                 </div>
 
