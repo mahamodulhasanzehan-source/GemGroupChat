@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch } from 'firebase/firestore';
 
 // Hardcoded Configuration provided by user
 const firebaseConfig = {
@@ -34,6 +34,8 @@ const mockCanvasListeners: Record<string, Function[]> = {};
 // Mock Presence
 const mockPresenceDb: Record<string, any> = {};
 const mockPresenceListeners: Record<string, Function[]> = {};
+// Mock User Groups Listener
+const mockUserGroupsListeners: ((groups: any) => void)[] = [];
 
 try {
     app = initializeApp(firebaseConfig);
@@ -50,6 +52,14 @@ export { auth, db, googleProvider, isConfigured };
 // --- Internal Helper for Mock Updates ---
 const notifyMockListeners = () => {
     authListeners.forEach(cb => cb(mockUser));
+};
+
+const notifyMockGroupListeners = () => {
+    // Basic mock implementation: return all groups for now
+    if (mockUserGroupsListeners.length > 0) {
+        const groups = Object.values(mockDb).map((g: any) => g.details);
+        mockUserGroupsListeners.forEach(cb => cb(groups));
+    }
 };
 
 // --- Auth Functions ---
@@ -197,11 +207,12 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
   if (!isConfigured || !db) {
       const mockId = 'offline-group-' + Date.now();
       mockDb[mockId] = {
-          details: { id: mockId, name: normalizedName, createdBy: creatorId, createdAt: Date.now(), members: [creatorId] },
+          details: { id: mockId, name: normalizedName, createdBy: creatorId, createdAt: Date.now(), members: [creatorId], processingMessageId: null },
           messages: []
       };
       // Init Canvas for group
       mockCanvasDb[mockId] = { html: '', css: '', js: '', lastUpdated: Date.now(), terminalOutput: [] };
+      notifyMockGroupListeners();
       return mockId;
   }
   
@@ -210,7 +221,8 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
     name: normalizedName,
     createdBy: creatorId,
     createdAt: Date.now(),
-    members: [creatorId]
+    members: [creatorId],
+    processingMessageId: null
   });
   // Init Canvas State
   await setDoc(doc(db, 'groups', groupRef.id, 'canvas', 'current'), {
@@ -237,6 +249,26 @@ export const getGroupDetails = async (groupId: string) => {
     return { id: docSnap.id, ...docSnap.data() };
   }
   return null;
+};
+
+export const subscribeToGroupDetails = (groupId: string, callback: (data: any) => void) => {
+    if (!isConfigured || !db) {
+        callback(mockDb[groupId]?.details || null);
+        return () => {};
+    }
+    return onSnapshot(doc(db, 'groups', groupId), (doc) => {
+        if (doc.exists()) callback({ id: doc.id, ...doc.data() });
+    });
+};
+
+export const updateGroup = async (groupId: string, updates: any) => {
+    if (!isConfigured || !db) {
+        if (mockDb[groupId]) {
+             mockDb[groupId].details = { ...mockDb[groupId].details, ...updates };
+        }
+        return;
+    }
+    await updateDoc(doc(db, 'groups', groupId), updates);
 };
 
 // Real-time Message Subscription
@@ -267,7 +299,11 @@ export const subscribeToMessages = (groupId: string, callback: (messages: any[])
 
 // Send Message
 export const sendMessage = async (groupId: string, message: any) => {
-  const msgData = { ...message, timestamp: Date.now() };
+  const msgData = { 
+      ...message, 
+      timestamp: Date.now(),
+      status: message.role === 'user' ? 'queued' : 'done' 
+  };
 
   // Offline Mode
   if (!isConfigured || !db) {
@@ -319,6 +355,40 @@ export const deleteMessage = async (groupId: string, messageId: string) => {
     // Real Mode
     const msgRef = doc(db, 'groups', groupId, 'messages', messageId);
     await deleteDoc(msgRef);
+}
+
+// Subscribe to User Groups (Created + Joined)
+export const subscribeToUserGroups = (userId: string, callback: (groups: any[]) => void) => {
+    if (!isConfigured || !db) {
+        mockUserGroupsListeners.push(callback);
+        notifyMockGroupListeners();
+        return () => {
+             const idx = mockUserGroupsListeners.indexOf(callback);
+             if (idx > -1) mockUserGroupsListeners.splice(idx, 1);
+        };
+    }
+
+    // Firestore OR queries are limited, so we subscribe to "members array-contains userId"
+    // This covers both created (creator is a member) and joined.
+    const q = query(collection(db, 'groups'), where('members', 'array-contains', userId));
+    
+    return onSnapshot(q, (snapshot) => {
+        const groups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        callback(groups);
+    });
+}
+
+// Delete Group Full
+export const deleteGroupFull = async (groupId: string) => {
+    if (!isConfigured || !db) {
+        delete mockDb[groupId];
+        notifyMockGroupListeners();
+        return;
+    }
+
+    // In a real app, use a Cloud Function for recursive delete. 
+    // Here we will try to delete the group doc. Subcollections might persist but become orphaned.
+    await deleteDoc(doc(db, 'groups', groupId));
 }
 
 // Group Locking (For exclusive editing)

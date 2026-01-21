@@ -14,6 +14,7 @@ export interface Message {
   timestamp: number;
   role: 'user' | 'model' | 'system';
   isLoading?: boolean;
+  status?: 'queued' | 'generating' | 'done'; // For queue management
 }
 
 export interface ChatSession {
@@ -31,6 +32,7 @@ export interface Group {
   members: string[]; // array of UIDs
   lockedBy?: string | null; // UID of user currently editing/prompting
   lockedAt?: number;
+  processingMessageId?: string | null; // ID of the message currently being processed by AI
 }
 
 export interface CanvasState {

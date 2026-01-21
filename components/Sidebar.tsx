@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { PlusIcon, UserGroupIcon, MenuIcon } from './Icons';
-import { updateUserProfile } from '../services/firebase';
+import React, { useState, useEffect } from 'react';
+import { PlusIcon, UserGroupIcon, MenuIcon, TrashIcon } from './Icons';
+import { updateUserProfile, subscribeToUserGroups, deleteGroupFull } from '../services/firebase';
+import { useNavigate } from 'react-router-dom';
 
 interface SidebarProps {
   isCollapsed: boolean;
@@ -13,6 +14,16 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, setIsCollapsed, onCreateGroup, onJoinGroup, currentUser }) => {
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(currentUser?.displayName || '');
+  const [myGroups, setMyGroups] = useState<any[]>([]);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+      if (!currentUser?.uid) return;
+      const unsubscribe = subscribeToUserGroups(currentUser.uid, (groups) => {
+          setMyGroups(groups);
+      });
+      return () => unsubscribe();
+  }, [currentUser]);
 
   const handleNameSave = () => {
       if (tempName.trim()) {
@@ -20,6 +31,19 @@ const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, setIsCollapsed, onCreate
           setIsEditingName(false);
       }
   };
+
+  const handleDeleteGroup = async (e: React.MouseEvent, groupId: string) => {
+      e.stopPropagation();
+      if (confirm("Are you sure you want to permanently delete this group? This cannot be undone.")) {
+          await deleteGroupFull(groupId);
+          if (window.location.hash.includes(groupId)) {
+              navigate('/');
+          }
+      }
+  };
+
+  const createdGroups = myGroups.filter(g => g.createdBy === currentUser?.uid);
+  const joinedGroups = myGroups.filter(g => g.createdBy !== currentUser?.uid);
 
   return (
     <div className={`flex flex-col h-full bg-[#1E1F20] transition-all duration-300 ${isCollapsed ? 'w-[72px]' : 'w-[280px]'} border-r border-[#444746]`}>
@@ -52,12 +76,55 @@ const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, setIsCollapsed, onCreate
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3">
-        {/* Empty State - No history/chats list as requested */}
+      <div className="flex-1 overflow-y-auto px-3 space-y-6">
         {!isCollapsed && (
-             <div className="mt-8 text-center px-4">
-                 <p className="text-xs text-[#C4C7C5]">Start a group to begin chatting.</p>
-             </div>
+             <>
+                {/* Created By Me */}
+                <div>
+                    <h3 className="text-xs font-semibold text-[#C4C7C5] uppercase tracking-wider mb-2 px-2">Created by me</h3>
+                    {createdGroups.length === 0 ? (
+                        <p className="text-xs text-[#5E5E5E] px-2 italic">No groups created.</p>
+                    ) : (
+                        <div className="space-y-1">
+                            {createdGroups.map(group => (
+                                <div 
+                                    key={group.id}
+                                    onClick={() => navigate(`/group/${group.id}`)}
+                                    className="group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors"
+                                >
+                                    <span className="text-sm text-[#E3E3E3] truncate">{group.name}</span>
+                                    <button 
+                                        onClick={(e) => handleDeleteGroup(e, group.id)}
+                                        className="opacity-0 group-hover:opacity-100 text-[#C4C7C5] hover:text-red-400 p-1"
+                                    >
+                                        <TrashIcon />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Joined Groups */}
+                <div>
+                    <h3 className="text-xs font-semibold text-[#C4C7C5] uppercase tracking-wider mb-2 px-2">Joined Groups</h3>
+                     {joinedGroups.length === 0 ? (
+                        <p className="text-xs text-[#5E5E5E] px-2 italic">No joined groups.</p>
+                    ) : (
+                        <div className="space-y-1">
+                             {joinedGroups.map(group => (
+                                <div 
+                                    key={group.id}
+                                    onClick={() => navigate(`/group/${group.id}`)}
+                                    className="group flex items-center px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors"
+                                >
+                                    <span className="text-sm text-[#E3E3E3] truncate">{group.name}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+             </>
         )}
       </div>
 
@@ -98,7 +165,6 @@ const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, setIsCollapsed, onCreate
                         </button>
                     </div>
                 )}
-                {/* Removed Plan text as requested */}
              </div>
            )}
         </div>
