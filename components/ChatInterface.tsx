@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { SendIcon, ImageUploadIcon, MicIcon } from './Icons';
 import { Message } from '../types';
 import { streamGeminiResponse } from '../services/geminiService';
-import { subscribeToMessages, sendMessage, updateMessage, getGroupDetails } from '../services/firebase';
+import { subscribeToMessages, sendMessage, updateMessage, getGroupDetails, subscribeToTokenUsage } from '../services/firebase';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -14,12 +14,23 @@ interface ChatInterfaceProps {
   groupId?: string;
 }
 
+// Helper for token display
+const formatTokenCount = (num: number) => {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+    return num.toString();
+};
+
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) => {
   const [input, setInput] = useState('');
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
   const [groupName, setGroupName] = useState<string>('');
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Token Usage State
+  const [tokenUsage, setTokenUsage] = useState<Record<string, number>>({});
+  const TOKEN_LIMIT = 1000000; // 1M TPM Limit per key (example)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -28,6 +39,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   useEffect(() => {
     scrollToBottom();
   }, [localMessages]);
+
+  // Subscribe to Token Usage
+  useEffect(() => {
+      const unsubscribe = subscribeToTokenUsage((data) => {
+          setTokenUsage(data);
+      });
+      return () => unsubscribe();
+  }, []);
 
   // Subscribe to Group Messages
   useEffect(() => {
@@ -145,12 +164,34 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           <span className="text-[#C4C7C5] text-sm hidden sm:inline-block cursor-pointer hover:text-white transition-colors">▼</span>
         </div>
         
-        {groupId && (
-           <div className="bg-[#1E1F20] px-3 py-1 rounded-full border border-[#444746] flex items-center gap-2 animate-[fadeIn_0.5s_ease-out]">
-              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.5)]"></span>
-              <span className="text-xs text-[#E3E3E3] font-medium">Live Session</span>
-           </div>
-        )}
+        {/* Token Usage Bars */}
+        <div className="flex items-center gap-3 animate-[fadeIn_0.5s_ease-out]">
+            <span className="text-[10px] text-[#C4C7C5] uppercase tracking-wider hidden sm:block">Token Usage</span>
+            <div className="flex gap-1.5">
+                {[1, 2, 3, 4].map((keyNum, i) => {
+                    const usage = tokenUsage[`key_${i}`] || 0;
+                    const percent = Math.min((usage / TOKEN_LIMIT) * 100, 100);
+                    const isHigh = percent > 80;
+                    
+                    return (
+                        <div key={i} className="group relative flex flex-col items-center justify-end w-2 h-6 bg-[#333537] rounded-sm overflow-hidden cursor-help">
+                            {/* Bar Fill */}
+                            <div 
+                                className={`w-full transition-all duration-500 ${isHigh ? 'bg-red-400' : 'bg-green-400'}`}
+                                style={{ height: `${percent}%` }}
+                            ></div>
+                            
+                            {/* Tooltip */}
+                            <div className="absolute top-full mt-2 right-0 hidden group-hover:block z-50 min-w-[120px] bg-[#1E1F20] border border-[#444746] rounded-md p-2 shadow-xl">
+                                <p className="text-xs text-[#E3E3E3] font-bold mb-1">Key {keyNum}</p>
+                                <p className="text-[10px] text-[#C4C7C5]">Used: {formatTokenCount(usage)}</p>
+                                <p className="text-[10px] text-[#C4C7C5]">Limit: {formatTokenCount(TOKEN_LIMIT)}</p>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
       </div>
 
       {/* Messages Area */}

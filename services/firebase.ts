@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment } from 'firebase/firestore';
 
 // Hardcoded Configuration provided by user
 const firebaseConfig = {
@@ -25,6 +25,9 @@ const authListeners: ((user: any) => void)[] = [];
 // Structure: { [groupId]: { details: {}, messages: [] } }
 const mockDb: Record<string, any> = {};
 const mockListeners: Record<string, Function[]> = {};
+// Mock Token Usage
+let mockTokenUsage: Record<string, number> = { key_0: 0, key_1: 0, key_2: 0, key_3: 0 };
+let mockUsageListener: ((data: any) => void) | null = null;
 
 try {
     app = initializeApp(firebaseConfig);
@@ -121,6 +124,38 @@ export const signOut = async () => {
     mockUser = null;
     notifyMockListeners();
   }
+};
+
+// --- Token Usage Functions ---
+
+export const subscribeToTokenUsage = (callback: (data: any) => void) => {
+    if (!isConfigured || !db) {
+        mockUsageListener = callback;
+        callback(mockTokenUsage);
+        return () => { mockUsageListener = null; };
+    }
+    
+    const docRef = doc(db, 'system', 'token_usage');
+    return onSnapshot(docRef, (doc) => {
+        if (doc.exists()) callback(doc.data());
+        else callback({});
+    });
+};
+
+export const updateTokenUsage = async (keyIndex: number, totalTokens: number) => {
+    const keyField = `key_${keyIndex}`;
+    
+    if (!isConfigured || !db) {
+        mockTokenUsage[keyField] = (mockTokenUsage[keyField] || 0) + totalTokens;
+        if (mockUsageListener) mockUsageListener({ ...mockTokenUsage });
+        return;
+    }
+
+    const docRef = doc(db, 'system', 'token_usage');
+    // Using setDoc with merge to ensure document exists, using increment for atomic updates
+    await setDoc(docRef, {
+        [keyField]: increment(totalTokens)
+    }, { merge: true });
 };
 
 // --- Group & Message Functions ---
