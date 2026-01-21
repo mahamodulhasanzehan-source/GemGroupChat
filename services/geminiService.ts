@@ -96,9 +96,6 @@ export const streamGeminiResponse = async (
       return;
   }
 
-  // NOTE: We removed the global system cooldown check here per request.
-  // We rely on rotating keys if one fails.
-
   let attempts = 0;
   const maxAttempts = API_KEYS.length; // Try each key once
   let success = false;
@@ -127,10 +124,8 @@ export const streamGeminiResponse = async (
     role: h.role,
     parts: [{ text: h.text }]
   }));
-  // Note: Gemini 1.5+ generally prefers system instruction in config, but chat prompts work too.
-  // We'll keep prompt construction as is.
-  const currentContent = { role: 'user', parts: [{ text: systemInstruction + "\n\nUser Prompt: " + prompt }] };
-  const fullContents = [...historyContents, currentContent];
+  
+  const fullContents = [...historyContents, { role: 'user', parts: [{ text: systemInstruction + "\n\nUser Prompt: " + prompt }] }];
 
   // RETRY LOOP
   while (attempts < maxAttempts && !success) {
@@ -190,7 +185,7 @@ export const streamGeminiResponse = async (
           updateTokenUsage(currentKeyIndex, totalTokens);
       }
 
-      // Remove from rate limited set if it succeeds (optional, but logical)
+      // Remove from rate limited set if it succeeds
       if (rateLimitedKeys.has(currentKeyIndex)) {
           rateLimitedKeys.delete(currentKeyIndex);
           notifyListeners();
@@ -201,48 +196,38 @@ export const streamGeminiResponse = async (
           throw error; 
       }
 
-      // Log error
-      console.warn(`[Gemini] Error on Key ${currentKeyIndex + 1}:`, error.message);
-
       const isRateLimit = error.message?.includes('429') || 
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
       
-      const isOverloaded = error.message?.includes('503') || error.status === 503;
-      const isForbidden = error.message?.includes('403') || error.status === 403;
-      const isKeyError = error.message?.includes('API key') || error.message?.includes('key not found');
+      // Check for specific "limit: 0" which means model unavailable or billing issue
+      const isQuotaZero = error.message?.includes('limit: 0');
 
-      if (isRateLimit || isOverloaded || isForbidden || isKeyError) {
-          // If Rate Limited, mark it Yellow
-          if (isRateLimit) {
-              rateLimitedKeys.add(currentKeyIndex);
+      if (isRateLimit) {
+          rateLimitedKeys.add(currentKeyIndex);
+          if (isQuotaZero) {
+              console.warn(`[Gemini] Key ${currentKeyIndex + 1} has 0 quota for model ${GEMINI_MODEL}. It may be disabled or invalid for this key.`);
+          } else {
+              console.warn(`[Gemini] Key ${currentKeyIndex + 1} hit rate limit.`);
           }
+      } else {
+          console.warn(`[Gemini] Error on Key ${currentKeyIndex + 1}:`, error.message);
+      }
 
-          attempts++;
-          
-          // If we haven't tried all keys yet, switch to next and retry loop
-          if (attempts < maxAttempts) {
-              switchToNextKey();
-              await delay(1000); // Small delay before retry
-              continue; // Retry loop
-          }
+      attempts++;
+      
+      // If we haven't tried all keys yet, switch to next and retry loop
+      if (attempts < maxAttempts) {
+          switchToNextKey();
+          await delay(1000); // Small delay before retry
+          continue; // Retry loop
       }
       
-      // If error is unknown (400 Bad Request) or we exhausted all keys
+      // If we exhausted all keys
       if (attempts >= maxAttempts) {
-         if (isRateLimit) {
-             onChunk(`\n\n*Error: All ${maxAttempts} keys are rate-limited. Please wait a moment.*`);
-         } else {
-             onChunk(`\n\n*Error: ${error.message}*`);
-         }
+         onChunk(`\n\n*Error: Unable to generate response. All ${maxAttempts} keys failed. Last error: ${error.message}*`);
          return; // Exit
       }
-      
-      // If unknown error but we have attempts left, we might still want to rotate?
-      // For safety, let's rotate on unknown network errors too.
-      attempts++;
-      switchToNextKey();
-      await delay(1000);
     }
   }
 };

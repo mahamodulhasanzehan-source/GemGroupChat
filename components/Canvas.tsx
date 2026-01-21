@@ -31,18 +31,42 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
       }
   };
 
-  const handleExtract = () => {
+  const handleExtract = async () => {
       if (!canvasState.html) return;
       
-      const blob = new Blob([canvasState.html], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'index.html';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      try {
+          // Check for File System Access API support (Chrome/Edge/Desktop)
+          // @ts-ignore
+          if (window.showSaveFilePicker) {
+              // @ts-ignore
+              const handle = await window.showSaveFilePicker({
+                  suggestedName: 'index.html',
+                  types: [{
+                      description: 'HTML File',
+                      accept: {'text/html': ['.html']},
+                  }],
+              });
+              const writable = await handle.createWritable();
+              await writable.write(canvasState.html);
+              await writable.close();
+          } else {
+              // Fallback for browsers that don't support the API (Firefox/Mobile)
+              const blob = new Blob([canvasState.html], { type: 'text/html' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'index.html';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+          }
+      } catch (err: any) {
+          if (err.name !== 'AbortError') {
+             console.error("Extract failed:", err);
+             alert("Failed to save file. Please try again.");
+          }
+      }
   };
 
   // Shared styles to ensure perfect alignment
@@ -104,7 +128,7 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
         <button 
             onClick={handleExtract}
             className="flex items-center gap-1.5 px-3 py-1.5 mb-1 bg-[#1A1A1C] hover:bg-[#333537] border border-[#444746] rounded text-[#E3E3E3] text-xs font-medium transition-colors"
-            title="Download index.html"
+            title="Save index.html to disk"
         >
             <DownloadIcon />
             <span className="hidden sm:inline">Extract</span>
