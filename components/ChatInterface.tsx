@@ -7,8 +7,8 @@ import ReactMarkdown from 'react-markdown';
 
 interface ChatInterfaceProps {
   currentUser: any;
-  messages: Message[]; // We ignore the parent passed messages now in favor of internal subscription
-  setMessages: any;    // ignored
+  messages: Message[]; 
+  setMessages: any;    
   groupId?: string;
 }
 
@@ -31,7 +31,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   useEffect(() => {
       if (!groupId) return;
 
-      // Get Group Details for Header
       getGroupDetails(groupId).then(details => {
           if (details) setGroupName(details.name);
       });
@@ -46,12 +45,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
     if (!input.trim() || isSending || !groupId) return;
     setIsSending(true);
 
+    const senderDisplayName = currentUser.displayName || 'Guest';
+
     const userMsgId = Date.now().toString();
     const userMsg: Message = {
       id: userMsgId,
       text: input,
       senderId: currentUser.uid,
-      senderName: currentUser.displayName || 'Guest',
+      senderName: senderDisplayName,
       timestamp: Date.now(),
       role: 'user'
     };
@@ -76,21 +77,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
         // 3. Create Placeholder for AI in DB
         await sendMessage(groupId, initialModelMsg);
 
-        // 4. Generate AI Response (Only the sender triggers this)
-        // We use current local history + the new message
-        const history = localMessages.map(m => ({
-            role: m.role as 'user' | 'model',
-            text: m.text
-        }));
-        history.push({ role: 'user', text: userMsg.text });
+        // 4. Generate AI Response
+        // We construct history with Explicit Name Prefixes to context
+        const history = localMessages.map(m => {
+            let content = m.text;
+            // Prepend name to user messages in history for context
+            if (m.role === 'user') {
+                content = `[${m.senderName}]: ${m.text}`;
+            }
+            return {
+                role: m.role as 'user' | 'model',
+                text: content
+            };
+        });
+
+        // Add the current message with name prefix
+        const currentPrompt = `[${senderDisplayName}]: ${userMsg.text}`;
 
         let accumulatedText = '';
         await streamGeminiResponse(
-            userMsg.text,
+            currentPrompt,
             history,
             async (chunk) => {
                 accumulatedText += chunk;
-                // Update DB with chunk (Throttling might be needed in prod, but fine for demo)
                 await updateMessage(groupId, modelMsgId, { 
                     text: accumulatedText,
                     isLoading: true 
@@ -159,6 +168,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                   
                   {/* Message Content */}
                   <div className={`flex flex-col max-w-[85%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
+                    {/* Name Label - Requested Feature */}
                     <div className="text-xs text-[#C4C7C5] mb-1 px-1 flex gap-2">
                       <span className="font-medium text-[#E3E3E3]">{msg.senderName}</span>
                       <span className="opacity-50">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -195,7 +205,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Message group..."
+              placeholder={`Message as ${currentUser.displayName || 'Guest'}...`}
               className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] placeholder-[#C4C7C5] text-base"
               disabled={isSending}
             />

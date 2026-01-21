@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 // Mapping Vercel/Screenshot Env Vars to Firebase Config
@@ -62,7 +62,16 @@ export const subscribeToAuth = (callback: (user: any) => void) => {
 
 export const signInWithGoogle = async () => {
   if (!isConfigured || !auth) {
-    alert("Google Sign-In requires Firebase configuration. Use 'Skip' to preview.");
+    // FALLBACK: Simulate Google Sign In for Preview Mode
+    // This fixes the blocking error when keys are missing
+    console.log("Simulating Google Sign-In (Mock Mode)");
+    mockUser = {
+      uid: 'mock-google-' + Date.now(),
+      displayName: 'Mock Google User',
+      photoURL: 'https://lh3.googleusercontent.com/a/default-user',
+      isAnonymous: false
+    };
+    notifyMockListeners();
     return;
   }
   try {
@@ -73,16 +82,24 @@ export const signInWithGoogle = async () => {
 };
 
 export const signInGuest = async () => {
+  // Prompt for name to ensure "Before every single user prompt, there should be the name" requirement
+  const name = prompt("Enter your display name for this session:", "Guest");
+  if (name === null) return; // Cancelled
+
   if (isConfigured && auth) {
     try {
-      await signInAnonymously(auth);
+      const result = await signInAnonymously(auth);
+      // Try to update profile with name (best effort for anonymous)
+      if (result.user) {
+          await updateProfile(result.user, { displayName: name || 'Guest' }).catch(() => {});
+      }
     } catch (error) {
       console.error("Error signing in anonymously", error);
     }
   } else {
     mockUser = {
       uid: 'guest-' + Date.now().toString().slice(-6),
-      displayName: 'Guest User',
+      displayName: name || 'Guest User',
       isAnonymous: true,
       photoURL: null
     };
