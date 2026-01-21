@@ -20,9 +20,10 @@ const WelcomeScreen = ({ onCreate, onJoin }: { onCreate: () => void, onJoin: () 
                 </p>
                 
                 <div className="flex flex-col sm:flex-row gap-4 justify-center mt-8">
+                    {/* Updated button color to #4285F4 (Darker Google Blue) */}
                     <button 
                         onClick={onCreate}
-                        className="px-8 py-3 bg-[#A8C7FA] text-[#004A77] rounded-full font-medium hover:bg-[#D3E3FD] transition-colors"
+                        className="px-8 py-3 bg-[#4285F4] text-white rounded-full font-medium hover:bg-[#3367D6] transition-colors shadow-[0_0_15px_rgba(66,133,244,0.3)]"
                     >
                         Create New Group
                     </button>

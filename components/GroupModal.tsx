@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createGroup, isConfigured, getGroupDetails } from '../services/firebase';
+import { createGroup, isConfigured, getGroupDetails, signOut } from '../services/firebase';
 
 interface GroupModalProps {
   isOpen: boolean;
@@ -24,19 +24,24 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
 
   useEffect(() => {
     if (isOpen) {
-        setActiveTab(mode);
+        // If user is guest, default to join
+        if (currentUser?.isAnonymous && mode === 'create') {
+             setActiveTab('join');
+        } else {
+             setActiveTab(mode);
+        }
         setStep('input');
         setGroupName('');
         setJoinGroupId('');
         setError('');
         setShareLink('');
     }
-  }, [isOpen, mode]);
+  }, [isOpen, mode, currentUser]);
 
   if (!isOpen) return null;
 
   const handleCreate = async () => {
-    if (!groupName.trim()) return;
+    if (!groupName.trim() || currentUser?.isAnonymous) return;
     setIsLoading(true);
     try {
       const groupId = await createGroup(groupName, currentUser.uid);
@@ -90,75 +95,109 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
         <div className="flex space-x-6 mb-6 border-b border-[#444746] pb-2">
             <button 
                 onClick={() => { setActiveTab('create'); setStep('input'); }}
-                className={`text-sm font-medium pb-2 transition-colors ${activeTab === 'create' ? 'text-[#A8C7FA] border-b-2 border-[#A8C7FA]' : 'text-[#C4C7C5]'}`}
+                className={`text-sm font-medium pb-2 transition-colors ${activeTab === 'create' ? 'text-[#4285F4] border-b-2 border-[#4285F4]' : 'text-[#C4C7C5]'}`}
             >
                 Create Group
             </button>
             <button 
                 onClick={() => { setActiveTab('join'); setStep('input'); }}
-                className={`text-sm font-medium pb-2 transition-colors ${activeTab === 'join' ? 'text-[#A8C7FA] border-b-2 border-[#A8C7FA]' : 'text-[#C4C7C5]'}`}
+                className={`text-sm font-medium pb-2 transition-colors ${activeTab === 'join' ? 'text-[#4285F4] border-b-2 border-[#4285F4]' : 'text-[#C4C7C5]'}`}
             >
                 Join Group
             </button>
         </div>
 
-        {/* Content */}
-        {activeTab === 'create' && step === 'input' && (
-           <div className="space-y-4">
-              <p className="text-sm text-[#C4C7C5]">Enter a name for your new group session.</p>
-              <div>
-                <input 
-                  type="text" 
-                  value={groupName}
-                  onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="e.g. Project Alpha"
-                  className="w-full bg-[#131314] border border-[#444746] rounded-lg p-3 text-[#E3E3E3] focus:border-[#A8C7FA] focus:outline-none transition-colors"
-                />
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={onClose}
-                  className="flex-1 py-2 rounded-full text-[#A8C7FA] hover:bg-[#333537] transition-colors font-medium text-sm"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleCreate}
-                  disabled={!groupName.trim() || isLoading}
-                  className="flex-1 py-2 rounded-full bg-[#A8C7FA] text-[#004A77] hover:bg-[#D3E3FD] transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-           </div>
+        {/* Content - Create Tab */}
+        {activeTab === 'create' && (
+            <>
+                {currentUser?.isAnonymous ? (
+                    <div className="space-y-4 text-center py-4">
+                        <div className="text-4xl">🔒</div>
+                        <h3 className="text-[#E3E3E3] font-medium">Authentication Required</h3>
+                        <p className="text-sm text-[#C4C7C5]">
+                            Guests cannot create new groups. Please sign in with Google to create a group, or join an existing one.
+                        </p>
+                        <div className="flex gap-3 pt-2">
+                            <button 
+                                onClick={onClose}
+                                className="flex-1 py-2 rounded-full text-[#A8C7FA] hover:bg-[#333537] transition-colors font-medium text-sm"
+                            >
+                                Cancel
+                            </button>
+                             <button 
+                                onClick={() => {
+                                    signOut();
+                                    onClose();
+                                }}
+                                className="flex-1 py-2 rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors font-medium text-sm"
+                            >
+                                Sign In with Google
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <>
+                        {step === 'input' && (
+                        <div className="space-y-4">
+                            <p className="text-sm text-[#C4C7C5]">Enter a name for your new group session.</p>
+                            <div>
+                                <input 
+                                type="text" 
+                                value={groupName}
+                                onChange={(e) => setGroupName(e.target.value)}
+                                placeholder="e.g. Project Alpha"
+                                className="w-full bg-[#131314] border border-[#444746] rounded-lg p-3 text-[#E3E3E3] focus:border-[#4285F4] focus:outline-none transition-colors"
+                                />
+                            </div>
+                            <div className="flex gap-3 pt-2">
+                                <button 
+                                onClick={onClose}
+                                className="flex-1 py-2 rounded-full text-[#A8C7FA] hover:bg-[#333537] transition-colors font-medium text-sm"
+                                >
+                                Cancel
+                                </button>
+                                <button 
+                                onClick={handleCreate}
+                                disabled={!groupName.trim() || isLoading}
+                                className="flex-1 py-2 rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                {isLoading ? 'Creating...' : 'Create'}
+                                </button>
+                            </div>
+                        </div>
+                        )}
+
+                        {step === 'share' && (
+                        <div className="space-y-6">
+                            <p className="text-sm text-[#C4C7C5]">Share this link with others to invite them.</p>
+                            <div className="bg-[#131314] border border-[#444746] rounded-lg p-4 break-all text-sm text-[#A8C7FA] font-mono select-all">
+                                {shareLink}
+                            </div>
+                            <div className="flex gap-3">
+                            <button 
+                                onClick={handleCopy}
+                                className="flex-1 py-2 rounded-full bg-[#1A1A1C] border border-[#444746] text-[#E3E3E3] hover:bg-[#333537] transition-colors font-medium text-sm"
+                            >
+                                Copy Link
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    onClose();
+                                    window.location.hash = `/group/${shareLink.split('/').pop()}`;
+                                }}
+                                className="flex-1 py-2 rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors font-medium text-sm"
+                            >
+                                Enter Group
+                            </button>
+                            </div>
+                        </div>
+                        )}
+                    </>
+                )}
+            </>
         )}
 
-        {activeTab === 'create' && step === 'share' && (
-           <div className="space-y-6">
-             <p className="text-sm text-[#C4C7C5]">Share this link with others to invite them.</p>
-             <div className="bg-[#131314] border border-[#444746] rounded-lg p-4 break-all text-sm text-[#A8C7FA] font-mono select-all">
-                {shareLink}
-             </div>
-             <div className="flex gap-3">
-               <button 
-                  onClick={handleCopy}
-                  className="flex-1 py-2 rounded-full bg-[#1A1A1C] border border-[#444746] text-[#E3E3E3] hover:bg-[#333537] transition-colors font-medium text-sm"
-               >
-                 Copy Link
-               </button>
-               <button 
-                  onClick={() => {
-                      onClose();
-                      window.location.hash = `/group/${shareLink.split('/').pop()}`;
-                  }}
-                  className="flex-1 py-2 rounded-full bg-[#A8C7FA] text-[#004A77] hover:bg-[#D3E3FD] transition-colors font-medium text-sm"
-               >
-                 Enter Group
-               </button>
-             </div>
-           </div>
-        )}
-
+        {/* Content - Join Tab */}
         {activeTab === 'join' && (
            <div className="space-y-4">
                <p className="text-sm text-[#C4C7C5]">Paste the group link or ID to join an existing session.</p>
@@ -168,7 +207,7 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
                   value={joinGroupId}
                   onChange={(e) => setJoinGroupId(e.target.value)}
                   placeholder="https://... or group-id"
-                  className="w-full bg-[#131314] border border-[#444746] rounded-lg p-3 text-[#E3E3E3] focus:border-[#A8C7FA] focus:outline-none transition-colors"
+                  className="w-full bg-[#131314] border border-[#444746] rounded-lg p-3 text-[#E3E3E3] focus:border-[#4285F4] focus:outline-none transition-colors"
                 />
                </div>
                {error && <p className="text-xs text-red-400">{error}</p>}
@@ -182,7 +221,7 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
                 <button 
                   onClick={handleJoin}
                   disabled={!joinGroupId.trim() || isLoading}
-                  className="flex-1 py-2 rounded-full bg-[#A8C7FA] text-[#004A77] hover:bg-[#D3E3FD] transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 py-2 rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isLoading ? 'Joining...' : 'Join'}
                 </button>

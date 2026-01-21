@@ -13,7 +13,12 @@ export const streamGeminiResponse = async (
   onChunk: (text: string) => void
 ) => {
   if (!apiKey) {
-      onChunk("⚠️ **Configuration Error**: `GEMINI_API_KEY_1` is missing. Please check your environment variables.");
+      onChunk(`⚠️ **Configuration Error**: \`GEMINI_API_KEY_1\` is missing from your Vercel Environment Variables.
+      
+To fix this:
+1. Go to your Vercel Project Settings.
+2. Navigate to **Environment Variables**.
+3. Add a new variable named \`GEMINI_API_KEY_1\` with your Google Gemini API key.`);
       return;
   }
 

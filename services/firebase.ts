@@ -62,24 +62,39 @@ export const subscribeToAuth = (callback: (user: any) => void) => {
 
 export const signInWithGoogle = async () => {
   if (!isConfigured || !auth) {
-    // FALLBACK: Simulate Google Sign In for Preview Mode
-    // This fixes the blocking error when keys are missing
-    console.log("Simulating Google Sign-In (Mock Mode)");
-    mockUser = {
-      uid: 'mock-google-' + Date.now(),
-      displayName: 'Mock Google User',
-      photoURL: 'https://lh3.googleusercontent.com/a/default-user',
-      isAnonymous: false
-    };
-    notifyMockListeners();
-    return;
+    // Return false to indicate that the UI should handle the mock flow
+    return false;
   }
   try {
     await signInWithPopup(auth, googleProvider);
+    return true;
   } catch (error) {
     console.error("Error signing in with Google", error);
+    return false;
   }
 };
+
+export const simulateGoogleSignIn = (email: string, name: string) => {
+    mockUser = {
+      uid: 'mock-google-' + Date.now(),
+      displayName: name,
+      email: email,
+      photoURL: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`,
+      isAnonymous: false
+    };
+    notifyMockListeners();
+};
+
+export const updateUserProfile = async (name: string) => {
+    if (isConfigured && auth && auth.currentUser) {
+        await updateProfile(auth.currentUser, { displayName: name });
+        // Force refresh
+        auth.updateCurrentUser(auth.currentUser); 
+    } else if (mockUser) {
+        mockUser = { ...mockUser, displayName: name };
+        notifyMockListeners();
+    }
+}
 
 export const signInGuest = async () => {
   // Prompt for name to ensure "Before every single user prompt, there should be the name" requirement
