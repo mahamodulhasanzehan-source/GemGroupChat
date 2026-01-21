@@ -1,3 +1,4 @@
+
 export interface UserProfile {
   uid: string;
   displayName: string | null;
@@ -28,6 +29,14 @@ export interface Group {
   createdBy: string;
   createdAt: number;
   members: string[]; // array of UIDs
+}
+
+export interface CanvasState {
+  html: string;
+  css: string;
+  js: string;
+  lastUpdated: number;
+  terminalOutput: string[]; // For the terminal view
 }
 
 export enum ViewState {

@@ -26,8 +26,11 @@ const authListeners: ((user: any) => void)[] = [];
 const mockDb: Record<string, any> = {};
 const mockListeners: Record<string, Function[]> = {};
 // Mock Token Usage
-let mockTokenUsage: Record<string, number> = { key_0: 0, key_1: 0, key_2: 0, key_3: 0 };
+let mockTokenUsage: Record<string, any> = { key_0: 0, key_1: 0, key_2: 0, key_3: 0, activeKeyIndex: 0 };
 let mockUsageListener: ((data: any) => void) | null = null;
+// Mock Canvas
+const mockCanvasDb: Record<string, any> = {};
+const mockCanvasListeners: Record<string, Function[]> = {};
 
 try {
     app = initializeApp(firebaseConfig);
@@ -147,6 +150,7 @@ export const updateTokenUsage = async (keyIndex: number, totalTokens: number) =>
     
     if (!isConfigured || !db) {
         mockTokenUsage[keyField] = (mockTokenUsage[keyField] || 0) + totalTokens;
+        mockTokenUsage.activeKeyIndex = keyIndex;
         if (mockUsageListener) mockUsageListener({ ...mockTokenUsage });
         return;
     }
@@ -154,7 +158,8 @@ export const updateTokenUsage = async (keyIndex: number, totalTokens: number) =>
     const docRef = doc(db, 'system', 'token_usage');
     // Using setDoc with merge to ensure document exists, using increment for atomic updates
     await setDoc(docRef, {
-        [keyField]: increment(totalTokens)
+        [keyField]: increment(totalTokens),
+        activeKeyIndex: keyIndex
     }, { merge: true });
 };
 
@@ -192,6 +197,8 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
           details: { id: mockId, name: normalizedName, createdBy: creatorId, createdAt: Date.now(), members: [creatorId] },
           messages: []
       };
+      // Init Canvas for group
+      mockCanvasDb[mockId] = { html: '', css: '', js: '', lastUpdated: Date.now(), terminalOutput: [] };
       return mockId;
   }
   
@@ -202,6 +209,15 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
     createdAt: Date.now(),
     members: [creatorId]
   });
+  // Init Canvas State
+  await setDoc(doc(db, 'groups', groupRef.id, 'canvas', 'current'), {
+      html: '',
+      css: '',
+      js: '',
+      lastUpdated: Date.now(),
+      terminalOutput: []
+  });
+
   return groupRef.id;
 };
 
@@ -281,4 +297,34 @@ export const updateMessage = async (groupId: string, messageId: string, updates:
   // Real Mode
   const msgRef = doc(db, 'groups', groupId, 'messages', messageId);
   await updateDoc(msgRef, updates);
+};
+
+// --- Canvas Functions ---
+
+export const subscribeToCanvas = (groupId: string, callback: (data: any) => void) => {
+    if (!isConfigured || !db) {
+        if (!mockCanvasListeners[groupId]) mockCanvasListeners[groupId] = [];
+        mockCanvasListeners[groupId].push(callback);
+        callback(mockCanvasDb[groupId] || { html: '', css: '', js: '', terminalOutput: [] });
+        return () => {};
+    }
+
+    const docRef = doc(db, 'groups', groupId, 'canvas', 'current');
+    return onSnapshot(docRef, (doc) => {
+        if (doc.exists()) callback(doc.data());
+        else callback({ html: '', css: '', js: '' });
+    });
+};
+
+export const updateCanvas = async (groupId: string, updates: any) => {
+    const data = { ...updates, lastUpdated: Date.now() };
+
+    if (!isConfigured || !db) {
+        mockCanvasDb[groupId] = { ...mockCanvasDb[groupId], ...data };
+        mockCanvasListeners[groupId]?.forEach(cb => cb(mockCanvasDb[groupId]));
+        return;
+    }
+
+    const docRef = doc(db, 'groups', groupId, 'canvas', 'current');
+    await setDoc(docRef, data, { merge: true });
 };

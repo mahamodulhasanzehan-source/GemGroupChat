@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 import { updateTokenUsage } from "./firebase";
+import { CanvasState } from "../types";
 
 // 1. Define Keys Array
 const API_KEYS = [
@@ -42,6 +43,7 @@ const rotateKey = () => {
 export const streamGeminiResponse = async (
   prompt: string, 
   history: { role: 'user' | 'model', text: string }[],
+  canvasState: CanvasState | null,
   onChunk: (text: string) => void
 ) => {
   if (API_KEYS.length === 0) {
@@ -53,31 +55,64 @@ export const streamGeminiResponse = async (
   const maxAttempts = API_KEYS.length; // Try every key once
   let success = false;
 
-  // Prepare full contents for counting tokens (History + Current Prompt)
+  // SYSTEM INSTRUCTION FOR CODING CANVAS
+  const systemInstruction = `
+  You are an expert full-stack web developer and coding assistant.
+  
+  CONTEXT:
+  You have access to a "Canvas" environment where you can write and update HTML, CSS, and JavaScript files.
+  The user can see the code editor, a live preview, and a terminal.
+  
+  CURRENT CANVAS STATE:
+  HTML Length: ${canvasState?.html.length || 0}
+  CSS Length: ${canvasState?.css.length || 0}
+  JS Length: ${canvasState?.js.length || 0}
+  
+  HTML Content:
+  \`\`\`html
+  ${canvasState?.html || '<!-- Empty -->'}
+  \`\`\`
+  
+  CSS Content:
+  \`\`\`css
+  ${canvasState?.css || '/* Empty */'}
+  \`\`\`
+
+  JS Content:
+  \`\`\`javascript
+  ${canvasState?.js || '// Empty'}
+  \`\`\`
+
+  INSTRUCTIONS:
+  1. If the user asks for code changes, DO NOT output the entire file unless necessary.
+  2. You can "internally break up" the code. Only output the specific code blocks (HTML, CSS, or JS) that need to be updated.
+  3. If you output a code block with \`html\`, \`css\`, or \`javascript\` language tags, the system will automatically update the Canvas.
+  4. Ensure your code is valid and syntax-correct.
+  5. Use the console/terminal concept by mentioning actions if needed, but primarily write code.
+  `;
+
+  // Prepare full contents for counting tokens
   const historyContents = history.map(h => ({
     role: h.role,
     parts: [{ text: h.text }]
   }));
-  const currentContent = { role: 'user', parts: [{ text: prompt }] };
+  const currentContent = { role: 'user', parts: [{ text: systemInstruction + "\n\nUser Prompt: " + prompt }] };
   const fullContents = [...historyContents, currentContent];
 
   while (attempts < maxAttempts && !success) {
     try {
       const ai = getClient();
       
-      // 1. Track Input Tokens using countTokens
-      // We do this inside the loop in case the key fails and we need to try another
+      // 1. Track Input Tokens
       let inputTokens = 0;
       try {
         const countResult = await ai.models.countTokens({
             model: GEMINI_MODEL,
             contents: fullContents
         });
-        // The SDK might return totalTokens or totalBillableCharacters
         inputTokens = countResult.totalTokens ?? 0;
       } catch (countError) {
           console.warn(`[Gemini Service] countTokens failed on key ${currentKeyIndex}`, countError);
-          // Don't fail the whole request just because counting failed, but it might indicate key issues
       }
 
       const chat = ai.chats.create({
@@ -85,7 +120,10 @@ export const streamGeminiResponse = async (
         history: history.map(h => ({
           role: h.role,
           parts: [{ text: h.text }]
-        }))
+        })),
+        config: {
+            systemInstruction: systemInstruction
+        }
       });
 
       const result = await chat.sendMessageStream({ message: prompt });
@@ -98,7 +136,6 @@ export const streamGeminiResponse = async (
            textAccumulated += chunk.text;
            onChunk(chunk.text);
          }
-         // Capture usage metadata if present in any chunk
          if (chunk.usageMetadata) {
              usageMetadata = chunk.usageMetadata;
          }
@@ -107,46 +144,40 @@ export const streamGeminiResponse = async (
       // 2. Calculate Total Usage and Update DB
       let totalTokens = 0;
       if (usageMetadata) {
-          // If the API provides metadata (authoritative), use it.
-          // usageMetadata.totalTokenCount usually includes both prompt and candidates.
           totalTokens = usageMetadata.totalTokenCount;
       } else {
-          // Fallback: Input (from countTokens) + Output (estimated 4 chars/token)
           const outputTokens = Math.ceil(textAccumulated.length / 4);
           totalTokens = inputTokens + outputTokens;
       }
 
-      // Update the usage for the current successful key
+      // Update usage AND the active key index so UI knows which key was used
       if (totalTokens > 0) {
           updateTokenUsage(currentKeyIndex, totalTokens);
       }
 
-      success = true; // Loop finishes if successful
+      success = true;
 
     } catch (error: any) {
       console.error(`Gemini API Error (Attempt ${attempts + 1}/${maxAttempts}):`, error);
       
-      // Check for Rate Limit (429) or Service Unavailable (503) or Resource Exhausted
       const isRateLimit = error.message?.includes('429') || 
-                          error.message?.includes('400') || // Sometimes quotas show as 400 in SDK
+                          error.message?.includes('400') ||
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
 
       if (isRateLimit) {
         attempts++;
         if (attempts < maxAttempts) {
-          rotateKey(); // Switch key for next loop iteration
-          continue; // Retry loop
+          rotateKey();
+          continue;
         }
       }
 
-      // If not a retryable error, or out of attempts
       if (attempts >= maxAttempts) {
          onChunk(`\n\n*Error: System overloaded. All API keys are currently rate-limited. Please try again in a minute.*`);
       } else {
-         // Generic error (not rate limit)
          onChunk(`\n\n*Error: ${error.message || 'Unknown Gemini API error'}*`);
-         success = true; // Exit loop to avoid infinite retries on bad requests
+         success = true;
       }
     }
   }

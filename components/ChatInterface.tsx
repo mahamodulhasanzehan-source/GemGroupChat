@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SendIcon, ImageUploadIcon, MicIcon } from './Icons';
-import { Message } from '../types';
+import { Message, CanvasState } from '../types';
 import { streamGeminiResponse } from '../services/geminiService';
-import { subscribeToMessages, sendMessage, updateMessage, getGroupDetails, subscribeToTokenUsage } from '../services/firebase';
+import { subscribeToMessages, sendMessage, updateMessage, getGroupDetails, subscribeToTokenUsage, subscribeToCanvas, updateCanvas } from '../services/firebase';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import Canvas from './Canvas';
 
 interface ChatInterfaceProps {
   currentUser: any;
@@ -28,9 +29,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Canvas State
+  const [canvasState, setCanvasState] = useState<CanvasState>({ html: '', css: '', js: '', lastUpdated: 0, terminalOutput: [] });
+
   // Token Usage State
-  const [tokenUsage, setTokenUsage] = useState<Record<string, number>>({});
-  const TOKEN_LIMIT = 1000000; // 1M TPM Limit per key (example)
+  const [tokenUsage, setTokenUsage] = useState<any>({});
+  const TOKEN_LIMIT = 1000000; // 1M TPM Limit
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -62,6 +66,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       return () => unsubscribe();
   }, [groupId]);
 
+  // Subscribe to Canvas State
+  useEffect(() => {
+      if (!groupId) return;
+      const unsubscribe = subscribeToCanvas(groupId, (data) => {
+          if (data) setCanvasState(data);
+      });
+      return () => unsubscribe;
+  }, [groupId]);
+
+  // Extract Code Blocks helper
+  const extractCode = (text: string) => {
+      const htmlMatch = text.match(/```html\n([\s\S]*?)```/);
+      const cssMatch = text.match(/```css\n([\s\S]*?)```/);
+      const jsMatch = text.match(/```javascript\n([\s\S]*?)```/) || text.match(/```js\n([\s\S]*?)```/);
+      
+      return {
+          html: htmlMatch ? htmlMatch[1] : null,
+          css: cssMatch ? cssMatch[1] : null,
+          js: jsMatch ? jsMatch[1] : null,
+      };
+  };
+
   const handleSend = async () => {
     if (!input.trim() || isSending || !groupId) return;
     setIsSending(true);
@@ -79,11 +105,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
     };
 
     try {
-        // 1. Send User Message to DB (Syncs to everyone)
         await sendMessage(groupId, userMsg);
         setInput('');
 
-        // 2. Prepare for AI Response
         const modelMsgId = (Date.now() + 1).toString();
         const initialModelMsg: Message = {
             id: modelMsgId,
@@ -95,10 +119,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             isLoading: true
         };
 
-        // 3. Create Placeholder for AI in DB
         await sendMessage(groupId, initialModelMsg);
 
-        // 4. Generate AI Response
         const history = localMessages.map(m => {
             let content = m.text;
             if (m.role === 'user') {
@@ -114,19 +136,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
         let accumulatedText = '';
         let lastUpdateTime = 0;
-        // Optimization: Throttle updates to 300ms to reduce write frequency
         const UPDATE_THROTTLE = 300; 
 
         await streamGeminiResponse(
             currentPrompt,
             history,
+            canvasState, // Pass current canvas state context
             async (chunk) => {
                 accumulatedText += chunk;
                 
                 const now = Date.now();
                 if (now - lastUpdateTime > UPDATE_THROTTLE) {
                     lastUpdateTime = now;
-                    // We optimistically update UI via subscription, but here we push to DB
                     await updateMessage(groupId, modelMsgId, { 
                         text: accumulatedText,
                         isLoading: true 
@@ -135,7 +156,33 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             }
         );
 
-        // Final update ensures complete text is saved
+        // Parse final response for code updates
+        const codeUpdates = extractCode(accumulatedText);
+        let canvasUpdated = false;
+        const newCanvas = { ...canvasState };
+        const logs = [...(newCanvas.terminalOutput || [])];
+
+        if (codeUpdates.html) {
+            newCanvas.html = codeUpdates.html;
+            logs.push(`> Updated HTML (${codeUpdates.html.length} chars)`);
+            canvasUpdated = true;
+        }
+        if (codeUpdates.css) {
+            newCanvas.css = codeUpdates.css;
+            logs.push(`> Updated CSS (${codeUpdates.css.length} chars)`);
+            canvasUpdated = true;
+        }
+        if (codeUpdates.js) {
+            newCanvas.js = codeUpdates.js;
+            logs.push(`> Updated JS (${codeUpdates.js.length} chars)`);
+            canvasUpdated = true;
+        }
+
+        if (canvasUpdated) {
+            newCanvas.terminalOutput = logs.slice(-20); // Keep last 20 logs
+            await updateCanvas(groupId, newCanvas);
+        }
+
         await updateMessage(groupId, modelMsgId, { 
             text: accumulatedText,
             isLoading: false 
@@ -155,165 +202,110 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
     }
   };
 
+  // Calculate current key usage stats
+  const activeIndex = tokenUsage.activeKeyIndex || 0;
+  const currentKeyUsage = tokenUsage[`key_${activeIndex}`] || 0;
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#131314] relative overflow-hidden">
-      {/* Top Bar */}
-      <div className="h-16 flex items-center justify-between px-6 border-b border-[#444746] bg-[#131314] sticky top-0 z-10 shadow-sm transition-all duration-300">
-        <div className="flex items-center gap-2">
-          <span className="text-[#E3E3E3] font-medium text-lg tracking-tight animate-[fadeIn_0.5s_ease-out]">{groupName || 'Group Chat'}</span>
-          <span className="text-[#C4C7C5] text-sm hidden sm:inline-block cursor-pointer hover:text-white transition-colors">▼</span>
-        </div>
+    <div className="flex h-full bg-[#131314] overflow-hidden">
         
-        {/* Token Usage Bars */}
-        <div className="flex items-center gap-3 animate-[fadeIn_0.5s_ease-out]">
-            <span className="text-[10px] text-[#C4C7C5] uppercase tracking-wider hidden sm:block">Token Usage</span>
-            <div className="flex gap-1.5">
-                {[1, 2, 3, 4].map((keyNum, i) => {
-                    const usage = tokenUsage[`key_${i}`] || 0;
-                    const percent = Math.min((usage / TOKEN_LIMIT) * 100, 100);
-                    const isHigh = percent > 80;
+      {/* Left Panel: Chat (35%) */}
+      <div className="w-[35%] flex flex-col border-r border-[#444746] min-w-[350px]">
+        
+        {/* Top Bar */}
+        <div className="h-14 shrink-0 flex items-center justify-between px-4 border-b border-[#444746] bg-[#131314]">
+            <span className="text-[#E3E3E3] font-medium tracking-tight truncate">{groupName || 'Chat'}</span>
+            
+            {/* New Token Usage Rectangle */}
+            <div className="flex items-center gap-0 text-xs font-mono bg-[#1E1F20] border border-[#444746] rounded overflow-hidden shadow-sm">
+                <div className="bg-[#333537] text-[#A8C7FA] px-2 py-1 border-r border-[#444746]">
+                    Key {activeIndex + 1}
+                </div>
+                <div className="text-[#C4C7C5] px-2 py-1">
+                    {formatTokenCount(currentKeyUsage)} / 1M
+                </div>
+            </div>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center scroll-smooth">
+            {localMessages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-[#C4C7C5] opacity-50 mt-10">
+                <p className="text-sm font-light">Ask Gemini to write some code!</p>
+            </div>
+            ) : (
+            <div className="w-full space-y-6 pb-4">
+                {localMessages.map((msg) => {
+                const isMe = msg.senderId === currentUser.uid;
+                const isGemini = msg.role === 'model';
+                
+                return (
+                    <div key={msg.id} className={`flex gap-3 ${isMe && !isGemini ? 'flex-row-reverse' : 'flex-row'}`}>
+                    <div className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center overflow-hidden border border-[#444746] ${isGemini ? 'bg-transparent' : 'bg-[#1E1F20]'}`}>
+                        {isGemini ? (
+                        <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" alt="AI" className="w-4 h-4 animate-[spin_10s_linear_infinite]" />
+                        ) : (
+                        <span className="text-[10px] text-white font-bold">{msg.senderName?.[0]?.toUpperCase() || 'U'}</span>
+                        )}
+                    </div>
                     
-                    return (
-                        <div key={i} className="group relative flex flex-col items-center justify-end w-2 h-6 bg-[#333537] rounded-sm overflow-hidden cursor-help">
-                            {/* Bar Fill */}
-                            <div 
-                                className={`w-full transition-all duration-500 ${isHigh ? 'bg-red-400' : 'bg-green-400'}`}
-                                style={{ height: `${percent}%` }}
-                            ></div>
-                            
-                            {/* Tooltip */}
-                            <div className="absolute top-full mt-2 right-0 hidden group-hover:block z-50 min-w-[120px] bg-[#1E1F20] border border-[#444746] rounded-md p-2 shadow-xl">
-                                <p className="text-xs text-[#E3E3E3] font-bold mb-1">Key {keyNum}</p>
-                                <p className="text-[10px] text-[#C4C7C5]">Used: {formatTokenCount(usage)}</p>
-                                <p className="text-[10px] text-[#C4C7C5]">Limit: {formatTokenCount(TOKEN_LIMIT)}</p>
-                            </div>
+                    <div className={`flex flex-col max-w-[90%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
+                        <div className={`prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}`}>
+                           <ReactMarkdown
+                                components={{
+                                code(props) {
+                                    const {children, className, node, ...rest} = props
+                                    const match = /language-(\w+)/.exec(className || '')
+                                    // If it's a code block, we render a simplified view in chat because it's in the canvas
+                                    if (match) {
+                                        return (
+                                            <div className="my-1 p-2 bg-[#131314] border border-[#444746] rounded text-xs text-[#A8C7FA] font-mono flex items-center gap-2">
+                                                <span>📄 Updated {match[1]} content in Canvas</span>
+                                            </div>
+                                        );
+                                    }
+                                    return <code {...rest} className={`${className} bg-[#333537] px-1 rounded text-xs`}>{children}</code>
+                                }
+                                }}
+                            >
+                                {msg.text}
+                            </ReactMarkdown>
                         </div>
-                    );
+                    </div>
+                    </div>
+                );
                 })}
+                <div ref={messagesEndRef} />
+            </div>
+            )}
+        </div>
+
+        {/* Input */}
+        <div className="p-3 bg-[#131314] border-t border-[#444746]">
+            <div className="bg-[#1E1F20] rounded-full flex items-center px-3 py-2 gap-2 border border-transparent focus-within:border-[#444746] transition-all">
+                <input 
+                    type="text" 
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Type instructions..."
+                    className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5]"
+                    disabled={isSending}
+                />
+                {input.trim() && (
+                    <button onClick={handleSend} className="p-1.5 bg-[#A8C7FA] text-[#000] rounded-full hover:scale-105 transition-transform">
+                        <SendIcon />
+                    </button>
+                )}
             </div>
         </div>
       </div>
 
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex flex-col items-center scroll-smooth">
-        {localMessages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-[#C4C7C5] opacity-50 animate-[fadeIn_0.8s_ease-out]">
-             <p className="text-lg font-light">No messages yet. Start the conversation!</p>
-          </div>
-        ) : (
-          <div className="w-full max-w-3xl space-y-6 pb-24">
-            {localMessages.map((msg) => {
-              const isMe = msg.senderId === currentUser.uid;
-              const isGemini = msg.role === 'model';
-              
-              return (
-                <div key={msg.id} className={`flex gap-4 ${isMe && !isGemini ? 'flex-row-reverse' : 'flex-row'} animate-[fadeIn_0.3s_ease-out]`}>
-                  {/* Avatar */}
-                  <div className={`w-8 h-8 rounded-full shrink-0 flex items-center justify-center overflow-hidden border border-[#444746] shadow-md transition-transform hover:scale-105 ${isGemini ? 'bg-transparent' : 'bg-[#1E1F20]'}`}>
-                    {isGemini ? (
-                       <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" alt="AI" className="w-6 h-6 animate-[spin_10s_linear_infinite]" />
-                    ) : (
-                       <span className="text-xs text-white font-bold select-none">{msg.senderName?.[0]?.toUpperCase() || 'U'}</span>
-                    )}
-                  </div>
-                  
-                  {/* Message Content */}
-                  <div className={`flex flex-col max-w-[85%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
-                    <div className="text-xs text-[#C4C7C5] mb-1 px-1 flex gap-2 select-none">
-                      <span className="font-medium text-[#E3E3E3]">{msg.senderName}</span>
-                      <span className="opacity-50">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    </div>
-                    
-                    <div className={`prose prose-invert prose-sm md:prose-base text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-2xl p-3 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20] rounded-tr-none' : 'bg-transparent pl-0'} ${msg.isLoading ? 'animate-pulse' : ''} transition-all duration-200`}>
-                      {msg.isLoading && !msg.text ? (
-                          <div className="flex gap-1 mt-2 p-2">
-                             <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce"></div>
-                             <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce delay-100"></div>
-                             <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce delay-200"></div>
-                          </div>
-                      ) : (
-                          <ReactMarkdown
-                            components={{
-                              code(props) {
-                                const {children, className, node, ...rest} = props
-                                const match = /language-(\w+)/.exec(className || '')
-                                if (match) {
-                                    // FIX: Extract ref to avoid type mismatch with SyntaxHighlighter
-                                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                                    const { ref, ...restNoRef } = rest as any;
-                                    return (
-                                        <div className="relative group/code my-2 rounded-lg overflow-hidden border border-[#444746]">
-                                            <div className="absolute top-2 right-2 opacity-0 group-hover/code:opacity-100 transition-opacity">
-                                                <button 
-                                                    onClick={() => navigator.clipboard.writeText(String(children))}
-                                                    className="bg-[#333537] text-xs text-white px-2 py-1 rounded hover:bg-[#444746]"
-                                                >
-                                                    Copy
-                                                </button>
-                                            </div>
-                                            <SyntaxHighlighter
-                                                {...restNoRef}
-                                                PreTag="div"
-                                                children={String(children).replace(/\n$/, '')}
-                                                language={match[1]}
-                                                style={vscDarkPlus}
-                                                customStyle={{ margin: 0, padding: '1rem', fontSize: '0.9em' }}
-                                            />
-                                        </div>
-                                    );
-                                }
-                                return (
-                                  <code {...rest} className={`${className} bg-[#333537] px-1 py-0.5 rounded text-sm`}>
-                                    {children}
-                                  </code>
-                                )
-                              }
-                            }}
-                          >
-                            {msg.text}
-                          </ReactMarkdown>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
+      {/* Right Panel: Canvas (65%) */}
+      <div className="flex-1 h-full">
+         <Canvas canvasState={canvasState} />
       </div>
 
-      {/* Input Area */}
-      <div className="bg-[#131314] p-4 flex justify-center sticky bottom-0 z-20">
-         <div className="w-full max-w-3xl bg-[#1E1F20] rounded-full flex items-center px-4 py-3 gap-3 border border-transparent focus-within:border-[#444746] transition-all duration-200 shadow-lg hover:shadow-xl hover:bg-[#28292a]">
-            <button className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors transform active:scale-95">
-                <ImageUploadIcon />
-            </button>
-            <input 
-              type="text" 
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={`Message as ${currentUser.displayName || 'Guest'}...`}
-              className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] placeholder-[#C4C7C5] text-base"
-              disabled={isSending}
-            />
-            <button className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors transform active:scale-95">
-               <MicIcon />
-            </button>
-            {input.trim() && (
-                <button 
-                  onClick={handleSend}
-                  className="p-2 bg-[#D3E3FD] hover:bg-white text-black rounded-full transition-all duration-200 animate-[zoomIn_0.2s_ease-out] hover:scale-110 active:scale-95 shadow-md"
-                >
-                    <SendIcon />
-                </button>
-            )}
-         </div>
-      </div>
-      <div className="text-center pb-2 text-[10px] text-[#C4C7C5] bg-[#131314] select-none">
-         Gemini may display inaccurate info, including about people, so double-check its responses.
-      </div>
     </div>
   );
 };
