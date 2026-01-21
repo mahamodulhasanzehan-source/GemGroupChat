@@ -2,14 +2,15 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
-// 1. Strict Mapping
+// Hardcoded Configuration provided by user
 const firebaseConfig = {
-  apiKey: process.env.GEMGROUPCHAT_KEY,
-  authDomain: process.env.GEMGROUPCHAT_AUTH,
-  projectId: process.env.GEMGROUPCHAT_ID,
-  storageBucket: process.env.GEMGROUPCHAT_BUCKET,
-  messagingSenderId: process.env.GEMGROUPCHAT_SENDER,
-  appId: process.env.GEMGROUPCHAT_APP
+  apiKey: "AIzaSyAc95KQ8qyZOEbanApkN2QhpESCwNnOA04",
+  authDomain: "gemgroupchat.firebaseapp.com",
+  projectId: "gemgroupchat",
+  storageBucket: "gemgroupchat.firebasestorage.app",
+  messagingSenderId: "596510108307",
+  appId: "1:596510108307:web:e65a22c2da81f3ffdcfb66",
+  measurementId: "G-HXJ7W1G5R0"
 };
 
 let app;
@@ -17,7 +18,6 @@ let auth: any;
 let db: any;
 let googleProvider: any;
 let isConfigured = false;
-let missingKeys: string[] = [];
 
 // --- Mock Data for Offline Guest Mode ---
 let mockUser: any = null;
@@ -26,29 +26,12 @@ const authListeners: ((user: any) => void)[] = [];
 const mockDb: Record<string, any> = {};
 const mockListeners: Record<string, Function[]> = {};
 
-// 2. Validation
-Object.entries(firebaseConfig).forEach(([key, value]) => {
-    if (!value) {
-        const envName = key === 'apiKey' ? 'GEMGROUPCHAT_KEY' :
-                        key === 'authDomain' ? 'GEMGROUPCHAT_AUTH' :
-                        key === 'projectId' ? 'GEMGROUPCHAT_ID' :
-                        key === 'storageBucket' ? 'GEMGROUPCHAT_BUCKET' :
-                        key === 'messagingSenderId' ? 'GEMGROUPCHAT_SENDER' :
-                        key === 'appId' ? 'GEMGROUPCHAT_APP' : key;
-        missingKeys.push(envName);
-    }
-});
-
 try {
-  if (missingKeys.length === 0) {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
     googleProvider = new GoogleAuthProvider();
     isConfigured = true;
-  } else {
-    console.warn("Firebase config missing keys. Running in Hybrid Mode (Auth Strict, Guest Offline).");
-  }
 } catch (error) {
   console.error("Failed to initialize Firebase:", error);
 }
@@ -78,7 +61,7 @@ export const subscribeToAuth = (callback: (user: any) => void) => {
 
 export const signInWithGoogle = async () => {
   if (!isConfigured || !auth) {
-    alert(`Cannot Sign In with Google.\n\nMissing Environment Variables:\n${missingKeys.join('\n')}`);
+    alert("Firebase is not initialized. Please check the hardcoded configuration.");
     return false;
   }
   try {
