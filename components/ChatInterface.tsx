@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { SendIcon, ImageUploadIcon, MicIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon } from './Icons';
+import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon } from './Icons';
 import { Message, CanvasState, Presence, Group } from '../types';
-import { streamGeminiResponse } from '../services/geminiService';
+import { streamGeminiResponse, subscribeToKeyStatus, setManualKey, TOTAL_KEYS } from '../services/geminiService';
 import { 
     subscribeToMessages, sendMessage, updateMessage, deleteMessage,
     subscribeToGroupDetails, subscribeToTokenUsage, updateGroup,
@@ -40,7 +40,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
   // UI State
   const [isCanvasCollapsed, setIsCanvasCollapsed] = useState(false);
-  // Mobile View State: 'chat' or 'canvas'
   const [mobileView, setMobileView] = useState<'chat' | 'canvas'>('chat');
 
   const [showOnlineUsers, setShowOnlineUsers] = useState(false);
@@ -53,8 +52,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const [canvasState, setCanvasState] = useState<CanvasState>({ html: '', css: '', js: '', lastUpdated: 0, terminalOutput: [] });
   const [tokenUsage, setTokenUsage] = useState<any>({});
   
+  // Key Management State
+  const [keyStatus, setKeyStatus] = useState<{ currentIndex: number, rateLimited: number[] }>({ currentIndex: 0, rateLimited: [] });
+  const [showKeyDropdown, setShowKeyDropdown] = useState(false);
+
   const processingRef = useRef<string | null>(null);
-  // Abort Controller Ref for stopping generation
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
@@ -66,8 +68,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   }, [localMessages]);
 
   useEffect(() => {
-      const unsubscribe = subscribeToTokenUsage((data) => setTokenUsage(data));
-      return () => unsubscribe();
+      // Subscribe to Token Usage from Firebase
+      const unsubscribeUsage = subscribeToTokenUsage((data) => setTokenUsage(data));
+      // Subscribe to Key Status from GeminiService
+      const unsubscribeKeys = subscribeToKeyStatus((status) => setKeyStatus(status));
+      
+      return () => {
+          unsubscribeUsage();
+          unsubscribeKeys();
+      };
   }, []);
 
   useEffect(() => {
@@ -75,7 +84,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       
       const unsubscribeGroup = subscribeToGroupDetails(groupId, (details) => {
           setGroupDetails(details);
-          // Check if processing was stopped externally
           if (details && details.processingMessageId === null && abortControllerRef.current) {
                console.log("Processing ID cleared externally, aborting local generation.");
                abortControllerRef.current.abort();
@@ -92,7 +100,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
       const unsubscribePresence = subscribeToPresence(groupId, (users) => setOnlineUsers(users));
 
-      // Heartbeat
       const heartbeat = setInterval(() => {
           updatePresence(groupId, currentUser);
       }, 60000); 
@@ -155,7 +162,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       const processQueue = async () => {
           const processingId = groupDetails.processingMessageId;
           
-          if (processingId) return; // Busy
+          if (processingId) return; 
 
           const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
           if (queuedMessages.length === 0) return;
@@ -185,7 +192,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const executeGeminiGeneration = async (userMsg: Message) => {
       if (!groupId) return;
 
-      // 1. Setup AbortController
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
@@ -239,7 +245,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
               abortController.signal
           );
 
-          // Final Sync
           const finalCode = extractCode(accumulatedText);
           if (finalCode.html) {
               await updateCanvas(groupId, { html: finalCode.html });
@@ -253,7 +258,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       } catch (e: any) {
           console.error("Error generating or Aborted", e);
           if (e.message === "Aborted by user" || e.name === "AbortError") {
-              // Update status to indicate stopped
               await updateMessage(groupId, userMsg.id, { status: 'done', text: userMsg.text + " [Stopped]" });
           } else {
              await updateMessage(groupId, userMsg.id, { status: 'done', text: userMsg.text + ` [Error: ${e.message}]` });
@@ -262,23 +266,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       } finally {
           setIsSending(false);
           abortControllerRef.current = null;
-          // Force back to null just in case
           processingRef.current = null;
       }
   };
 
-  // Shared Stop Action
   const handleStop = async () => {
       if (!groupId) return;
-      console.log("Stop requested by user");
-      
-      // 1. Abort locally immediately if I am the one generating
       if (abortControllerRef.current) {
           abortControllerRef.current.abort();
           abortControllerRef.current = null;
       }
-
-      // 2. Clear the processing lock in DB so everyone knows it stopped
       await updateGroup(groupId, { processingMessageId: null });
       setIsSending(false);
   };
@@ -293,7 +290,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
         }
     }
 
-    // Usually switching to Chat view on send is good UX
     setMobileView('chat'); 
 
     const senderDisplayName = currentUser.displayName || 'Guest';
@@ -341,20 +337,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
            setHiddenMessageIds(prev => new Set(prev).add(msg.id));
       }
   };
-
-  const activeIndex = tokenUsage.activeKeyIndex || 0;
-  const currentKeyUsage = tokenUsage[`key_${activeIndex}`] || 0;
   
   const visibleMessages = localMessages.filter(m => m.status !== 'queued' && !hiddenMessageIds.has(m.id));
   const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
-
-  // Check if system is busy (anyone processing)
   const isSystemBusy = !!groupDetails?.processingMessageId;
+
+  // Key Selection Logic
+  const handleKeySelect = (index: number) => {
+      setManualKey(index);
+      setShowKeyDropdown(false);
+  };
+
+  // Generate Key List for UI
+  const keyList = Array.from({ length: TOTAL_KEYS }, (_, i) => {
+      const usage = tokenUsage[`key_${i}`] || 0;
+      const isRateLimited = keyStatus.rateLimited.includes(i);
+      const isActive = keyStatus.currentIndex === i;
+      return { index: i, usage, isRateLimited, isActive };
+  });
 
   return (
     <div className="flex h-full bg-[#131314] overflow-hidden">
         
-      {/* Left Panel: Chat (Conditional Hidden on Mobile) */}
+      {/* Left Panel */}
       <div className={`flex flex-col border-r border-[#444746] transition-all duration-300 
             ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'} 
             ${isCanvasCollapsed ? 'md:w-full max-w-4xl mx-auto md:border-r-0' : 'md:w-[35%] md:min-w-[350px]'}
@@ -392,15 +397,47 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             </div>
             
             <div className="flex items-center gap-2">
-                 <div className="hidden md:flex items-center gap-0 text-xs font-mono bg-[#1E1F20] border border-[#444746] rounded overflow-hidden shadow-sm">
-                    <div className="bg-[#333537] text-[#A8C7FA] px-2 py-1 border-r border-[#444746]">
-                        Key {activeIndex + 1}
-                    </div>
-                    {/* Updated to remove " / 1M" based on user feedback */}
-                    <div className="text-[#C4C7C5] px-2 py-1">
-                        Tokens: {formatTokenCount(currentKeyUsage)}
-                    </div>
-                </div>
+                 {/* Key Selector Dropdown */}
+                 <div className="relative hidden md:block">
+                     <button 
+                        onClick={() => setShowKeyDropdown(!showKeyDropdown)}
+                        className={`flex items-center gap-2 text-xs font-mono border border-[#444746] rounded overflow-hidden shadow-sm hover:border-[#5E5E5E] transition-colors
+                            ${keyStatus.rateLimited.includes(keyStatus.currentIndex) ? 'bg-yellow-900/20 border-yellow-700/50' : 'bg-[#1E1F20]'}
+                        `}
+                     >
+                        <div className={`px-2 py-1 border-r border-[#444746] ${keyStatus.rateLimited.includes(keyStatus.currentIndex) ? 'text-yellow-500' : 'bg-[#333537] text-[#A8C7FA]'}`}>
+                            Key {keyStatus.currentIndex + 1}
+                        </div>
+                        <div className="text-[#C4C7C5] px-2 py-1 flex items-center gap-1">
+                            {formatTokenCount(tokenUsage[`key_${keyStatus.currentIndex}`] || 0)}
+                            <ChevronDownIcon className="w-3 h-3" />
+                        </div>
+                    </button>
+
+                    {showKeyDropdown && (
+                        <div className="absolute top-full right-0 mt-2 w-56 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden">
+                            <div className="py-1">
+                                {keyList.map((k) => (
+                                    <button
+                                        key={k.index}
+                                        onClick={() => handleKeySelect(k.index)}
+                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] transition-colors
+                                            ${k.isActive ? 'bg-[#333537/50]' : ''}
+                                            ${k.isRateLimited ? 'text-yellow-500' : 'text-[#C4C7C5]'}
+                                        `}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <span className={`w-1.5 h-1.5 rounded-full ${k.isActive ? 'bg-[#4285F4]' : 'bg-transparent'}`}></span>
+                                            <span className="font-mono">Key {k.index + 1}</span>
+                                            {k.isRateLimited && <span className="text-[10px] bg-yellow-900/30 px-1 rounded border border-yellow-700/50">429</span>}
+                                        </div>
+                                        <span className="font-mono text-[10px] opacity-70">{formatTokenCount(k.usage)}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                 </div>
 
                 {/* Mobile: Toggle to Canvas */}
                 <button 
@@ -424,7 +461,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             </div>
         </div>
 
-        {/* Messages */}
+        {/* Messages List & Input Area (Unchanged logic, just re-rendering) */}
         <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center scroll-smooth relative">
             <div className="w-full space-y-6 pb-4">
                 {visibleMessages.map((msg, index) => {
@@ -556,7 +593,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                     disabled={isSystemBusy && !editingMessageId} 
                 />
                 
-                {/* Stop Button or Send Button */}
                 {isSystemBusy ? (
                     <button 
                         onClick={handleStop} 
@@ -576,7 +612,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
         </div>
       </div>
 
-      {/* Right Panel: Canvas (Conditional Hidden on Mobile) */}
+      {/* Right Panel */}
       {!isCanvasCollapsed && (
           <div className={`flex-1 h-full flex flex-col min-w-0 
               ${mobileView === 'chat' ? 'hidden md:flex' : 'flex w-full'}`

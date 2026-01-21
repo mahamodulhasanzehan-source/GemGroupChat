@@ -3,7 +3,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CanvasState } from '../types';
 import { updateCanvas } from '../services/firebase';
-import { ChevronDownIcon } from './Icons';
+import { ChevronDownIcon, DownloadIcon } from './Icons';
 
 interface CanvasProps {
   canvasState: CanvasState;
@@ -18,9 +18,6 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlighterRef = useRef<HTMLDivElement>(null);
 
-  // Auto-compile handled by the AI's single file output now.
-  // We just use canvasState.html directly as it contains style/script.
-
   const handleCodeChange = (code: string) => {
       // Update only HTML field as we are in single-file mode
       updateCanvas(groupId, { html: code });
@@ -32,6 +29,20 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
           highlighterRef.current.scrollTop = e.currentTarget.scrollTop;
           highlighterRef.current.scrollLeft = e.currentTarget.scrollLeft;
       }
+  };
+
+  const handleExtract = () => {
+      if (!canvasState.html) return;
+      
+      const blob = new Blob([canvasState.html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'index.html';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
   };
 
   // Shared styles to ensure perfect alignment
@@ -88,6 +99,16 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
             Terminal
             </button>
         </div>
+        
+        {/* Extract Button */}
+        <button 
+            onClick={handleExtract}
+            className="flex items-center gap-1.5 px-3 py-1.5 mb-1 bg-[#1A1A1C] hover:bg-[#333537] border border-[#444746] rounded text-[#E3E3E3] text-xs font-medium transition-colors"
+            title="Download index.html"
+        >
+            <DownloadIcon />
+            <span className="hidden sm:inline">Extract</span>
+        </button>
       </div>
 
       {/* Content Area */}
@@ -112,14 +133,13 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
         {/* Code Mode - Editable (Single File) */}
         <div className={`absolute inset-0 w-full h-full bg-[#1E1F20] flex flex-col transition-opacity duration-300 ${activeTab === 'code' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
              
-             {/* File Header - CLEANED: Removed "Single File Component" text */}
+             {/* File Header */}
              <div className="flex bg-[#131314] border-b border-[#444746] px-4 py-1">
                  <span className="text-xs font-mono text-[#A8C7FA]">index.html</span>
              </div>
 
              {/* Editor Area */}
              <div className="relative flex-1 overflow-hidden">
-                 {/* Syntax Highlighter (Background) */}
                  <div 
                     ref={highlighterRef}
                     className="absolute inset-0 pointer-events-none overflow-hidden" 
@@ -143,7 +163,6 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
                     </SyntaxHighlighter>
                  </div>
 
-                 {/* Editable Textarea (Foreground) */}
                  <textarea
                     ref={textareaRef}
                     value={canvasState.html || ''}

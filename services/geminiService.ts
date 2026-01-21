@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
-import { updateTokenUsage, getSystemConfig, setSystemCooldown } from "./firebase";
+import { updateTokenUsage, getSystemConfig } from "./firebase";
 import { CanvasState } from "../types";
 
 // 1. Define Keys Array
@@ -10,13 +10,52 @@ const API_KEYS = [
   process.env.GEMINI_API_KEY_3,
   process.env.GEMINI_API_KEY_4,
   process.env.GEMINI_API_KEY_5,
-  process.env.API_KEY // Fallback to generic key
+  process.env.API_KEY // Fallback
 ].filter(Boolean) as string[];
 
-// 2. State for rotation
+export const TOTAL_KEYS = API_KEYS.length;
+
+// 2. State
 let currentKeyIndex = 0;
 let aiClient: GoogleGenAI | null = null;
 let activeKey: string | null = null;
+
+// Track Rate Limited Keys (Yellow status)
+const rateLimitedKeys = new Set<number>();
+
+// Subscription for UI
+const keyStatusListeners: ((status: { currentIndex: number, rateLimited: number[] }) => void)[] = [];
+
+const notifyListeners = () => {
+    const status = {
+        currentIndex: currentKeyIndex,
+        rateLimited: Array.from(rateLimitedKeys)
+    };
+    keyStatusListeners.forEach(cb => cb(status));
+};
+
+export const subscribeToKeyStatus = (callback: (status: { currentIndex: number, rateLimited: number[] }) => void) => {
+    keyStatusListeners.push(callback);
+    // Send initial state
+    callback({
+        currentIndex: currentKeyIndex,
+        rateLimited: Array.from(rateLimitedKeys)
+    });
+    return () => {
+        const idx = keyStatusListeners.indexOf(callback);
+        if (idx > -1) keyStatusListeners.splice(idx, 1);
+    };
+};
+
+export const setManualKey = (index: number) => {
+    if (index >= 0 && index < API_KEYS.length) {
+        currentKeyIndex = index;
+        aiClient = null; // Force client recreate
+        activeKey = null;
+        console.log(`[Gemini Service] Manually set to Key ${index + 1}`);
+        notifyListeners();
+    }
+};
 
 // Helper to get or create client with current key
 const getClient = (): GoogleGenAI => {
@@ -26,25 +65,23 @@ const getClient = (): GoogleGenAI => {
     throw new Error("No API keys found in configuration.");
   }
 
-  // If we haven't initialized, or if the key index changed (rotation happened), re-init
   if (!aiClient || activeKey !== keyToUse) {
-    console.log(`[Gemini Service] Switching to API Key Index: ${currentKeyIndex}`);
+    // console.log(`[Gemini Service] Initializing Client with Key Index: ${currentKeyIndex}`);
     aiClient = new GoogleGenAI({ apiKey: keyToUse });
     activeKey = keyToUse;
   }
   return aiClient;
 };
 
-// Helper to rotate key index
-const rotateKey = () => {
-  currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
-  console.warn(`[Gemini Service] Rotating to next key. New Index: ${currentKeyIndex}`);
-  // Force client recreation next time getClient is called
-  aiClient = null; 
-  activeKey = null;
+const switchToNextKey = () => {
+    currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
+    aiClient = null;
+    activeKey = null;
+    console.warn(`[Gemini Service] Switching to Key ${currentKeyIndex + 1}`);
+    notifyListeners();
 };
 
-// Delay helper for retries
+// Delay helper
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const streamGeminiResponse = async (
@@ -59,21 +96,13 @@ export const streamGeminiResponse = async (
       return;
   }
 
-  // GLOBAL CIRCUIT BREAKER CHECK
-  const config = await getSystemConfig();
-  if (config.globalCooldownUntil > Date.now()) {
-      const waitSeconds = Math.ceil((config.globalCooldownUntil - Date.now()) / 1000);
-      onChunk(`⚠️ **System Cooldown**: All API keys are currently rate-limited. Please wait ${waitSeconds} seconds.`);
-      return;
-  }
+  // NOTE: We removed the global system cooldown check here per request.
+  // We rely on rotating keys if one fails.
 
-  // Max attempts = number of keys. We try each key exactly once per request.
-  // If all keys fail, we stop. We do not loop endlessly.
   let attempts = 0;
-  const maxAttempts = API_KEYS.length; 
+  const maxAttempts = API_KEYS.length; // Try each key once
   let success = false;
 
-  // SYSTEM INSTRUCTION FOR CODING CANVAS
   const systemInstruction = `
   You are an expert full-stack web developer and coding assistant.
   
@@ -98,19 +127,19 @@ export const streamGeminiResponse = async (
     role: h.role,
     parts: [{ text: h.text }]
   }));
+  // Note: Gemini 1.5+ generally prefers system instruction in config, but chat prompts work too.
+  // We'll keep prompt construction as is.
   const currentContent = { role: 'user', parts: [{ text: systemInstruction + "\n\nUser Prompt: " + prompt }] };
   const fullContents = [...historyContents, currentContent];
 
+  // RETRY LOOP
   while (attempts < maxAttempts && !success) {
-    // 1. Check Abort Signal immediately
-    if (signal?.aborted) {
-        throw new Error("Aborted by user");
-    }
+    if (signal?.aborted) throw new Error("Aborted by user");
 
     try {
       const ai = getClient();
       
-      // Optional: Input Token Check (Silent fail)
+      // Attempt to count tokens (optional, doesn't break flow)
       let inputTokens = 0;
       try {
         const countResult = await ai.models.countTokens({
@@ -118,7 +147,7 @@ export const streamGeminiResponse = async (
             contents: fullContents
         });
         inputTokens = countResult.totalTokens ?? 0;
-      } catch (countError) {}
+      } catch (e) {}
 
       const chat = ai.chats.create({
         model: GEMINI_MODEL,
@@ -126,9 +155,7 @@ export const streamGeminiResponse = async (
           role: h.role,
           parts: [{ text: h.text }]
         })),
-        config: {
-            systemInstruction: systemInstruction
-        }
+        config: { systemInstruction }
       });
 
       const result = await chat.sendMessageStream({ message: prompt });
@@ -137,9 +164,8 @@ export const streamGeminiResponse = async (
       let usageMetadata: any = null;
 
       for await (const chunk of result) {
-         if (signal?.aborted) {
-             throw new Error("Aborted by user");
-         }
+         if (signal?.aborted) throw new Error("Aborted by user");
+         
          if (chunk.text) {
            textAccumulated += chunk.text;
            onChunk(chunk.text);
@@ -149,7 +175,10 @@ export const streamGeminiResponse = async (
          }
       }
 
-      // Success! Calculate Usage
+      // If we got here, request was successful
+      success = true;
+
+      // Update Usage
       let totalTokens = 0;
       if (usageMetadata) {
           totalTokens = usageMetadata.totalTokenCount;
@@ -157,55 +186,63 @@ export const streamGeminiResponse = async (
           const outputTokens = Math.ceil(textAccumulated.length / 4);
           totalTokens = inputTokens + outputTokens;
       }
-
       if (totalTokens > 0) {
-          // Only update usage on SUCCESS.
           updateTokenUsage(currentKeyIndex, totalTokens);
       }
 
-      success = true; // Break the loop
+      // Remove from rate limited set if it succeeds (optional, but logical)
+      if (rateLimitedKeys.has(currentKeyIndex)) {
+          rateLimitedKeys.delete(currentKeyIndex);
+          notifyListeners();
+      }
 
     } catch (error: any) {
       if (error.message === "Aborted by user" || signal?.aborted) {
-          throw error; // Re-throw aborts to exit immediately
+          throw error; 
       }
 
-      attempts++;
-      console.error(`Gemini API Error (KeyIdx ${currentKeyIndex}):`, error.message);
-      
+      // Log error
+      console.warn(`[Gemini] Error on Key ${currentKeyIndex + 1}:`, error.message);
+
       const isRateLimit = error.message?.includes('429') || 
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
       
       const isOverloaded = error.message?.includes('503') || error.status === 503;
       const isForbidden = error.message?.includes('403') || error.status === 403;
-      // Key not found or invalid
-      const isKeyError = error.message?.includes('API key not valid') || error.message?.includes('key not found');
+      const isKeyError = error.message?.includes('API key') || error.message?.includes('key not found');
 
-      if (isRateLimit) {
-           console.warn("429 Encountered. Triggering Project-Wide Cooldown.");
-           await setSystemCooldown(Date.now() + 60000);
-           onChunk(`⚠️ **Rate Limit Hit**: A 429 error occurred. System entering 60s cooldown.`);
-           return; // Stop trying other keys, the project is rate limited.
+      if (isRateLimit || isOverloaded || isForbidden || isKeyError) {
+          // If Rate Limited, mark it Yellow
+          if (isRateLimit) {
+              rateLimitedKeys.add(currentKeyIndex);
+          }
+
+          attempts++;
+          
+          // If we haven't tried all keys yet, switch to next and retry loop
+          if (attempts < maxAttempts) {
+              switchToNextKey();
+              await delay(1000); // Small delay before retry
+              continue; // Retry loop
+          }
       }
-
-      // If it's a specific error that warrants trying another key
-      if (isOverloaded || isForbidden || isKeyError) {
-        rotateKey();
-        // Do NOT updateTokenUsage(0) here, it messes up the stats.
-        
-        // Add a delay to prevent rapid strobing
-        await delay(1500); 
-        continue;
+      
+      // If error is unknown (400 Bad Request) or we exhausted all keys
+      if (attempts >= maxAttempts) {
+         if (isRateLimit) {
+             onChunk(`\n\n*Error: All ${maxAttempts} keys are rate-limited. Please wait a moment.*`);
+         } else {
+             onChunk(`\n\n*Error: ${error.message}*`);
+         }
+         return; // Exit
       }
-
-      // If it's a completely unknown error (e.g. 400 Bad Request on prompt), stop.
-      onChunk(`\n\n*Error: ${error.message}*`);
-      return;
+      
+      // If unknown error but we have attempts left, we might still want to rotate?
+      // For safety, let's rotate on unknown network errors too.
+      attempts++;
+      switchToNextKey();
+      await delay(1000);
     }
-  }
-
-  if (!success && !signal?.aborted) {
-      onChunk(`\n\n*System Exhausted: Tried all ${maxAttempts} available API keys without success.*`);
   }
 };
