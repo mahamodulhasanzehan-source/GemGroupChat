@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { createGroup } from '../services/firebase';
+import { createGroup, isConfigured } from '../services/firebase';
 
 interface GroupModalProps {
   isOpen: boolean;
@@ -25,6 +25,7 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
       setStep('share');
     } catch (error) {
       console.error("Failed to create group", error);
+      alert("Failed to create group. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -32,7 +33,6 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
 
   const handleCopy = () => {
     navigator.clipboard.writeText(shareLink);
-    // Could add toast here
   };
 
   return (
@@ -47,6 +47,11 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
           <p className="text-sm text-[#C4C7C5] mt-1">
             {step === 'create' ? 'Start a collaborative chat session.' : 'Share this link to let others join as guests.'}
           </p>
+          {!isConfigured && (
+              <p className="text-xs text-yellow-500 mt-2 bg-yellow-900/20 p-2 rounded border border-yellow-700/50">
+                  Note: Database not configured. Groups will not persist after reload in this preview.
+              </p>
+          )}
         </div>
 
         {/* Content */}
@@ -80,7 +85,7 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
            </div>
         ) : (
            <div className="space-y-6">
-             <div className="bg-[#131314] border border-[#444746] rounded-lg p-4 break-all text-sm text-[#A8C7FA] font-mono">
+             <div className="bg-[#131314] border border-[#444746] rounded-lg p-4 break-all text-sm text-[#A8C7FA] font-mono select-all">
                 {shareLink}
              </div>
              
@@ -94,7 +99,6 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, onClose, currentUser })
                <button 
                   onClick={() => {
                       onClose();
-                      // Logic to redirect to the new group immediately
                       window.location.hash = `/group/${shareLink.split('/').pop()}`;
                   }}
                   className="flex-1 py-2 rounded-full bg-[#A8C7FA] text-[#004A77] hover:bg-[#D3E3FD] transition-colors font-medium text-sm"

@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
 
 // Mapping Vercel/Screenshot Env Vars to Firebase Config
@@ -16,28 +16,53 @@ let app;
 let auth: any;
 let db: any;
 let googleProvider: any;
+let isConfigured = false;
 
-// Safely attempt to initialize Firebase
-// This prevents the "Uncaught FirebaseError" that causes the white/black screen of death
-// if environment variables are missing.
+// Mock Auth State for Preview/Skip Mode when Firebase is missing
+let mockUser: any = null;
+const authListeners: ((user: any) => void)[] = [];
+
 try {
   if (firebaseConfig.apiKey) {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
     googleProvider = new GoogleAuthProvider();
+    isConfigured = true;
   } else {
-    console.warn("Firebase configuration is missing. App will enter configuration mode.");
+    console.warn("Firebase config missing. Running in Mock/Preview mode.");
   }
 } catch (error) {
   console.error("Failed to initialize Firebase:", error);
 }
 
-export { auth, db, googleProvider };
+export { auth, db, googleProvider, isConfigured };
+
+// Notify mock listeners
+const notifyMockListeners = () => {
+  authListeners.forEach(listener => listener(mockUser));
+};
+
+// Unified Auth Subscription (Handles both Real Firebase and Mock)
+export const subscribeToAuth = (callback: (user: any) => void) => {
+  if (isConfigured && auth) {
+    return onAuthStateChanged(auth, callback);
+  } else {
+    // Immediate callback with current mock state
+    callback(mockUser);
+    // Subscribe
+    authListeners.push(callback);
+    // Unsubscribe function
+    return () => {
+      const index = authListeners.indexOf(callback);
+      if (index > -1) authListeners.splice(index, 1);
+    };
+  }
+};
 
 export const signInWithGoogle = async () => {
-  if (!auth) {
-    alert("Authentication is not configured. Please set up environment variables.");
+  if (!isConfigured || !auth) {
+    alert("Google Sign-In requires Firebase configuration. Use 'Skip' to preview.");
     return;
   }
   try {
@@ -48,26 +73,41 @@ export const signInWithGoogle = async () => {
 };
 
 export const signInGuest = async () => {
-  if (!auth) {
-    alert("Authentication is not configured. Please set up environment variables.");
-    return;
-  }
-  try {
-    await signInAnonymously(auth);
-  } catch (error) {
-    console.error("Error signing in anonymously", error);
+  if (isConfigured && auth) {
+    try {
+      await signInAnonymously(auth);
+    } catch (error) {
+      console.error("Error signing in anonymously", error);
+    }
+  } else {
+    // Mock Guest Login
+    mockUser = {
+      uid: 'guest-' + Date.now().toString().slice(-6),
+      displayName: 'Guest User',
+      isAnonymous: true,
+      photoURL: null
+    };
+    notifyMockListeners();
   }
 };
 
 export const signOut = async () => {
-  if (auth) {
+  if (isConfigured && auth) {
     await firebaseSignOut(auth);
+  } else {
+    // Mock Sign Out
+    mockUser = null;
+    notifyMockListeners();
   }
 };
 
 // Firestore Helpers for Groups
 export const createGroup = async (name: string, creatorId: string): Promise<string> => {
-  if (!db) throw new Error("Database not initialized");
+  if (!isConfigured || !db) {
+    // Return a mock ID for UI preview
+    console.warn("Database not configured. Using Mock Group ID.");
+    return 'mock-group-' + Date.now();
+  }
   
   const groupRef = await addDoc(collection(db, 'groups'), {
     name,
@@ -79,13 +119,24 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
 };
 
 export const joinGroup = async (groupId: string, userId: string) => {
-  if (!db) return;
+  if (!isConfigured || !db) return;
   // meaningful logic would go here to add user to members array
-  // keeping it simple for UI demo
 };
 
 export const getGroupDetails = async (groupId: string) => {
-  if (!db) return null;
+  if (!isConfigured || !db) {
+    // Return mock details if in preview mode
+    if (groupId.startsWith('mock-group')) {
+        return {
+            id: groupId,
+            name: 'Mock Group Session',
+            createdBy: 'mock-user',
+            createdAt: Date.now(),
+            members: []
+        };
+    }
+    return null;
+  }
   const docRef = doc(db, 'groups', groupId);
   const docSnap = await getDoc(docRef);
   if (docSnap.exists()) {
