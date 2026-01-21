@@ -18,6 +18,13 @@ interface ChatInterfaceProps {
   groupId?: string;
 }
 
+// Custom Stop Icon
+const StopIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+        <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+);
+
 const formatTokenCount = (num: number) => {
     if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
     if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
@@ -33,24 +40,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
   // UI State
   const [isCanvasCollapsed, setIsCanvasCollapsed] = useState(false);
+  // Mobile View State: 'chat' or 'canvas'
+  const [mobileView, setMobileView] = useState<'chat' | 'canvas'>('chat');
+
   const [showOnlineUsers, setShowOnlineUsers] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Presence[]>([]);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   
-  // Local Hide State (Session based)
   const [hiddenMessageIds, setHiddenMessageIds] = useState<Set<string>>(new Set());
-
-  // Edit Mode State
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
 
-  // Canvas State
   const [canvasState, setCanvasState] = useState<CanvasState>({ html: '', css: '', js: '', lastUpdated: 0, terminalOutput: [] });
-
-  // Token Usage State
   const [tokenUsage, setTokenUsage] = useState<any>({});
   
-  // Ref to track local processing state to prevent duplicate triggers
   const processingRef = useRef<string | null>(null);
+  // Abort Controller Ref for stopping generation
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
     if (!editingMessageId) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -68,7 +73,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   useEffect(() => {
       if (!groupId) return;
       
-      const unsubscribeGroup = subscribeToGroupDetails(groupId, (details) => setGroupDetails(details));
+      const unsubscribeGroup = subscribeToGroupDetails(groupId, (details) => {
+          setGroupDetails(details);
+          // Check if processing was stopped externally
+          if (details && details.processingMessageId === null && abortControllerRef.current) {
+               // Someone (or me) cleared the processing ID, so we abort
+               abortControllerRef.current.abort();
+               abortControllerRef.current = null;
+          }
+      });
       const unsubscribeMsgs = subscribeToMessages(groupId, (msgs) => setLocalMessages(msgs));
       
       const unsubscribeCanvas = subscribeToCanvas(groupId, (data) => {
@@ -92,47 +105,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       };
   }, [groupId, currentUser]);
 
-  // Extract Single HTML Code Block
   const extractCode = (text: string) => {
-      // Look for ```html ... ``` block
       const htmlMatch = text.match(/```html\s*([\s\S]*?)(```|$)/i);
-      // Fallback: If no tag, but looks like HTML
       const genericMatch = text.match(/```\s*([\s\S]*?)(```|$)/i);
-      
       let code = null;
       if (htmlMatch) {
           code = htmlMatch[1];
       } else if (genericMatch && (genericMatch[1].includes('<html') || genericMatch[1].includes('<!DOCTYPE'))) {
           code = genericMatch[1];
       }
-
       return { html: code };
   };
 
-  // --- Optimization Logic: Sliding Window + Heuristic Summary ---
   const prepareOptimizedHistory = (allMessages: Message[], currentMsgId: string) => {
-      // 1. Filter out queued/generating/hidden/current messages
       const fullHistory = allMessages
         .filter(m => m.status !== 'queued' && m.id !== currentMsgId && !hiddenMessageIds.has(m.id))
         .map(m => ({
             role: m.role as 'user' | 'model',
             text: m.role === 'user' ? `[${m.senderName}]: ${m.text}` : m.text,
-            originalText: m.text // keep for summarization check
+            originalText: m.text 
         }));
 
-      // 2. Sliding Window: Keep last 10 messages
       const MAX_HISTORY = 10;
-      
       if (fullHistory.length <= MAX_HISTORY) {
           return fullHistory.map(m => ({ role: m.role, text: m.text }));
       }
 
-      // 3. Slice the last N
       const recentHistory = fullHistory.slice(-MAX_HISTORY);
       const olderHistory = fullHistory.slice(0, -MAX_HISTORY);
 
-      // 4. Heuristic Summary for Older Context
-      // Since we can't use AI to summarize without cost, we use the first few user prompts to set the "topic"
       const firstUserMsg = olderHistory.find(m => m.role === 'user');
       const topic = firstUserMsg ? firstUserMsg.originalText.substring(0, 150) + "..." : "General Project";
       
@@ -146,40 +147,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       return [summaryMsg, ...recentHistory.map(m => ({ role: m.role, text: m.text }))];
   };
 
-
-  // --- Queue Processing Logic ---
   useEffect(() => {
-      // Check if I am the "owner" of the next queued message
       if (!groupDetails || !groupId || localMessages.length === 0) return;
 
       const processQueue = async () => {
           const processingId = groupDetails.processingMessageId;
           
-          // 1. Is the AI free (according to DB)?
           if (processingId) return; // Busy
 
-          // 2. Find next queued message
           const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
           if (queuedMessages.length === 0) return;
 
-          const nextMsg = queuedMessages[0]; // Oldest first
+          const nextMsg = queuedMessages[0];
 
-          // 3. Local Lock Check: Are we ALREADY processing this specific message locally?
-          // This prevents the useEffect from firing multiple times for the same message before DB updates.
           if (processingRef.current === nextMsg.id) return;
 
-          // 4. Am I the sender?
           if (nextMsg.senderId === currentUser.uid) {
               console.log("Processing Queue: My Turn", nextMsg.id);
-              
-              // Set local lock immediately
               processingRef.current = nextMsg.id;
               
               try {
                   await executeGeminiGeneration(nextMsg);
               } finally {
-                  // Release local lock when done (or if error occurred and handled)
-                  // We check if current ref matches to avoid clearing a subsequent lock
                   if (processingRef.current === nextMsg.id) {
                       processingRef.current = null;
                   }
@@ -194,14 +183,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const executeGeminiGeneration = async (userMsg: Message) => {
       if (!groupId) return;
 
-      try {
-          // Lock the queue in DB
-          await updateGroup(groupId, { processingMessageId: userMsg.id });
-          
-          // Update message status to generating
-          await updateMessage(groupId, userMsg.id, { status: 'generating' });
+      // 1. Setup AbortController
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
-          // Create Model Placeholder
+      try {
+          await updateGroup(groupId, { processingMessageId: userMsg.id });
+          await updateMessage(groupId, userMsg.id, { status: 'generating' });
+          setIsSending(true);
+
           const modelMsgId = (Date.now() + 1).toString();
           await sendMessage(groupId, {
             id: modelMsgId,
@@ -213,10 +203,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             status: 'generating'
           });
 
-          // Build context using Optimized Sliding Window
           const validHistory = prepareOptimizedHistory(localMessages, userMsg.id);
-          
-          // Add current prompt
           validHistory.push({ role: 'user', text: `[${userMsg.senderName}]: ${userMsg.text}` });
 
           let accumulatedText = '';
@@ -230,9 +217,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
               async (chunk) => {
                   accumulatedText += chunk;
                   
-                  // Live Code Parsing & Update
                   const codeUpdates = extractCode(accumulatedText);
-                  
                   if (codeUpdates.html && codeUpdates.html.length > canvasState.html.length) {
                        const now = Date.now();
                        if (now - lastUpdateTime > 500) {
@@ -248,7 +233,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                           isLoading: true 
                       });
                   }
-              }
+              },
+              abortController.signal
           );
 
           // Final Sync
@@ -257,25 +243,38 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
               await updateCanvas(groupId, { html: finalCode.html });
           }
 
-          // Complete
           await updateMessage(groupId, modelMsgId, { text: accumulatedText, isLoading: false, status: 'done' });
           await updateMessage(groupId, userMsg.id, { status: 'done' });
           
-          // Release Lock in DB
           await updateGroup(groupId, { processingMessageId: null });
 
-      } catch (e) {
-          console.error("Error generating", e);
-          // Release lock on error
-           await updateGroup(groupId, { processingMessageId: null });
-           await updateMessage(groupId, userMsg.id, { status: 'done' }); // prevent stuck loop
+      } catch (e: any) {
+          console.error("Error generating or Aborted", e);
+          if (e.message === "Aborted by user" || e.name === "AbortError") {
+              // Update status to indicate stopped
+              await updateMessage(groupId, userMsg.id, { status: 'done', text: userMsg.text + " [Stopped]" });
+          }
+          await updateGroup(groupId, { processingMessageId: null });
+      } finally {
+          setIsSending(false);
+          abortControllerRef.current = null;
+          // Force back to null just in case
+          processingRef.current = null;
       }
+  };
+
+  // Shared Stop Action
+  const handleStop = async () => {
+      if (!groupId) return;
+      // Clear the processing lock in DB. 
+      // The person running the generation (via useEffect above) will see this and abort their controller.
+      await updateGroup(groupId, { processingMessageId: null });
+      setIsSending(false);
   };
 
   const handleSend = async () => {
     if (!input.trim() || isSending || !groupId) return;
     
-    // Check Lock (Manual editing lock)
     if (groupDetails?.lockedBy && groupDetails.lockedBy !== currentUser.uid) {
         if (Date.now() - (groupDetails.lockedAt || 0) < 120000) {
             alert("Group is currently locked by another user editing a prompt.");
@@ -283,7 +282,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
         }
     }
 
-    setIsSending(true);
+    // Usually switching to Chat view on send is good UX
+    setMobileView('chat'); 
+
     const senderDisplayName = currentUser.displayName || 'Guest';
 
     try {
@@ -304,8 +305,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
         setInput('');
     } catch (e) {
         console.error("Error sending", e);
-    } finally {
-        setIsSending(false);
     }
   };
 
@@ -328,7 +327,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                await deleteMessage(groupId!, msg.id);
            }
       } else {
-           // Local Hide for others' prompts
            setHiddenMessageIds(prev => new Set(prev).add(msg.id));
       }
   };
@@ -336,15 +334,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const activeIndex = tokenUsage.activeKeyIndex || 0;
   const currentKeyUsage = tokenUsage[`key_${activeIndex}`] || 0;
   
-  // Filter messages for view (Remove queued and hidden)
   const visibleMessages = localMessages.filter(m => m.status !== 'queued' && !hiddenMessageIds.has(m.id));
   const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
+
+  // Check if system is busy (anyone processing)
+  const isSystemBusy = !!groupDetails?.processingMessageId;
 
   return (
     <div className="flex h-full bg-[#131314] overflow-hidden">
         
-      {/* Left Panel: Chat */}
-      <div className={`flex flex-col border-r border-[#444746] transition-all duration-300 ${isCanvasCollapsed ? 'w-full max-w-4xl mx-auto border-r-0' : 'w-[35%] min-w-[350px]'}`}>
+      {/* Left Panel: Chat (Conditional Hidden on Mobile) */}
+      <div className={`flex flex-col border-r border-[#444746] transition-all duration-300 
+            ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'} 
+            ${isCanvasCollapsed ? 'md:w-full max-w-4xl mx-auto md:border-r-0' : 'md:w-[35%] md:min-w-[350px]'}
+      `}>
         
         {/* Top Bar */}
         <div className="h-14 shrink-0 flex items-center justify-between px-4 border-b border-[#444746] bg-[#131314]">
@@ -353,7 +356,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                     {groupDetails?.name || 'Chat'}
                 </span>
                 
-                {/* Online Users */}
                 <div className="relative">
                     <button 
                         onClick={() => setShowOnlineUsers(!showOnlineUsers)}
@@ -379,19 +381,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             </div>
             
             <div className="flex items-center gap-2">
-                 <div className="flex items-center gap-0 text-xs font-mono bg-[#1E1F20] border border-[#444746] rounded overflow-hidden shadow-sm">
+                 <div className="hidden md:flex items-center gap-0 text-xs font-mono bg-[#1E1F20] border border-[#444746] rounded overflow-hidden shadow-sm">
                     <div className="bg-[#333537] text-[#A8C7FA] px-2 py-1 border-r border-[#444746]">
                         Key {activeIndex + 1}
                     </div>
                     <div className="text-[#C4C7C5] px-2 py-1">
-                        {formatTokenCount(currentKeyUsage)} / 1M
+                        {formatTokenCount(currentKeyUsage)}
                     </div>
                 </div>
 
+                {/* Mobile: Toggle to Canvas */}
+                <button 
+                    onClick={() => setMobileView('canvas')}
+                    className="md:hidden p-1.5 bg-[#4285F4] text-white rounded-md text-xs font-medium"
+                >
+                    Canvas &gt;
+                </button>
+
+                {/* Desktop: Expand Canvas */}
                 {isCanvasCollapsed && (
                     <button 
                         onClick={() => setIsCanvasCollapsed(false)}
-                        className="p-1.5 hover:bg-[#333537] text-[#E3E3E3] rounded-md border border-[#444746]"
+                        className="hidden md:flex p-1.5 hover:bg-[#333537] text-[#E3E3E3] rounded-md border border-[#444746]"
                         title="Open Canvas"
                     >
                         <ChevronDownIcon /> 
@@ -407,8 +418,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                 {visibleMessages.map((msg, index) => {
                 const isMe = msg.senderId === currentUser.uid;
                 const isGemini = msg.role === 'model';
-                
-                // Identify if this is the user's latest prompt
                 const myMessages = visibleMessages.filter(m => m.senderId === currentUser.uid);
                 const isMyLatest = myMessages.length > 0 && myMessages[myMessages.length - 1].id === msg.id;
 
@@ -419,7 +428,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                         onMouseEnter={() => setHoveredMessageId(msg.id)}
                         onMouseLeave={() => setHoveredMessageId(null)}
                     >
-                        {/* Avatar */}
                         <div className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center overflow-hidden border border-[#444746] ${isGemini ? 'bg-transparent' : 'bg-[#1E1F20]'}`}>
                             {isGemini ? (
                             <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" alt="AI" className="w-4 h-4 animate-[spin_10s_linear_infinite]" />
@@ -428,7 +436,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                             )}
                         </div>
                     
-                        {/* Message Content */}
                         <div className={`flex flex-col max-w-[90%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
                             <div className={`prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}`}>
                             <ReactMarkdown
@@ -452,17 +459,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                             </div>
                         </div>
 
-                        {/* Action Menu (Fixed Visibility for everyone) */}
                         {!isGemini && hoveredMessageId === msg.id && (
                             <div className={`flex items-center opacity-0 group-hover:opacity-100 transition-opacity self-center ${isMe ? 'mr-1' : 'ml-1'}`}>
                                 <div className="relative group/menu">
                                     <button className="p-1 text-[#C4C7C5] hover:text-white hover:bg-[#333537] rounded">
                                         <DotsHorizontalIcon />
                                     </button>
-                                    
-                                    {/* Dropdown positioned based on alignment */}
                                     <div className={`absolute top-0 ${isMe ? 'right-full mr-1' : 'left-full ml-1'} bg-[#1E1F20] border border-[#444746] rounded shadow-lg z-10 w-24 overflow-hidden`}>
-                                        {/* Edit - Only for my latest prompt */}
                                         {isMe && isMyLatest && (
                                             <button 
                                                 onClick={() => handleEdit(msg)}
@@ -471,8 +474,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                                 <PencilIcon /> Edit
                                             </button>
                                         )}
-                                        
-                                        {/* Delete - Real delete for me, Hide for others */}
                                         <button 
                                             onClick={() => handleDelete(msg)}
                                             className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-[#333537] flex items-center gap-2"
@@ -490,7 +491,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             </div>
         </div>
 
-        {/* Floating Queue UI (Above Input) */}
         {queuedMessages.length > 0 && (
             <div className="absolute bottom-20 left-1/2 -translate-x-1/2 w-3/4 max-w-md bg-[#1E1F20]/90 backdrop-blur-md border border-[#444746] rounded-xl shadow-2xl p-3 z-20 animate-[slideUp_0.3s_ease-out]">
                 <div className="flex items-center justify-between mb-2 pb-2 border-b border-[#444746]/50">
@@ -510,7 +510,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                     <span className="text-xs text-[#C4C7C5] truncate">{msg.text}</span>
                                 </div>
                             </div>
-                            {/* Delete from Queue if Mine */}
                             {msg.senderId === currentUser.uid && (
                                 <button 
                                     onClick={() => deleteMessage(groupId!, msg.id)}
@@ -540,33 +539,51 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder={editingMessageId ? "Edit your prompt..." : "Type instructions... (Added to queue)"}
+                    placeholder={editingMessageId ? "Edit your prompt..." : isSystemBusy ? "Generating..." : "Type instructions..."}
                     className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5]"
-                    disabled={isSending && !!editingMessageId} 
+                    disabled={isSystemBusy && !editingMessageId} 
                 />
-                {(input.trim() || editingMessageId) && (
-                    <button onClick={handleSend} className="p-1.5 bg-[#A8C7FA] text-[#000] rounded-full hover:scale-105 transition-transform">
-                        <SendIcon />
+                
+                {/* Stop Button or Send Button */}
+                {isSystemBusy ? (
+                    <button 
+                        onClick={handleStop} 
+                        className="p-1.5 bg-[#E3E3E3] text-black rounded-full hover:bg-white hover:scale-105 transition-transform"
+                        title="Stop Generating (Accessible by everyone)"
+                    >
+                        <StopIcon />
                     </button>
+                ) : (
+                    (input.trim() || editingMessageId) && (
+                        <button onClick={handleSend} className="p-1.5 bg-[#A8C7FA] text-[#000] rounded-full hover:scale-105 transition-transform">
+                            <SendIcon />
+                        </button>
+                    )
                 )}
             </div>
         </div>
       </div>
 
-      {/* Right Panel: Canvas (Collapsible) */}
+      {/* Right Panel: Canvas (Conditional Hidden on Mobile) */}
       {!isCanvasCollapsed && (
-          <div className="flex-1 h-full flex flex-col min-w-0">
+          <div className={`flex-1 h-full flex flex-col min-w-0 
+              ${mobileView === 'chat' ? 'hidden md:flex' : 'flex w-full'}`
+          }>
              <div className="h-8 bg-[#1E1F20] border-b border-[#444746] flex items-center justify-end px-2">
                  <button 
                     onClick={() => setIsCanvasCollapsed(true)}
-                    className="p-1 hover:bg-[#333537] text-[#C4C7C5] rounded"
+                    className="hidden md:block p-1 hover:bg-[#333537] text-[#C4C7C5] rounded"
                     title="Collapse Canvas"
                  >
                      <ChevronRightIcon />
                  </button>
              </div>
              <div className="flex-1 overflow-hidden">
-                <Canvas canvasState={canvasState} groupId={groupId || 'demo'} />
+                <Canvas 
+                    canvasState={canvasState} 
+                    groupId={groupId || 'demo'} 
+                    onCloseMobile={() => setMobileView('chat')}
+                />
              </div>
           </div>
       )}

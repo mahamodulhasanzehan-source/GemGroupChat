@@ -50,7 +50,8 @@ export const streamGeminiResponse = async (
   prompt: string, 
   history: { role: 'user' | 'model', text: string }[],
   canvasState: CanvasState | null,
-  onChunk: (text: string) => void
+  onChunk: (text: string) => void,
+  signal?: AbortSignal // NEW: Support for aborting
 ) => {
   if (API_KEYS.length === 0) {
       onChunk(`⚠️ **Configuration Error**: No \`GEMINI_API_KEY_x\` found in Environment Variables.`);
@@ -98,6 +99,11 @@ export const streamGeminiResponse = async (
   const fullContents = [...historyContents, currentContent];
 
   while (attempts < maxAttempts && !success) {
+    // Check abort signal at start of loop
+    if (signal?.aborted) {
+        throw new Error("Aborted by user");
+    }
+
     try {
       const ai = getClient();
       
@@ -130,6 +136,9 @@ export const streamGeminiResponse = async (
       let usageMetadata: any = null;
 
       for await (const chunk of result) {
+         if (signal?.aborted) {
+             throw new Error("Aborted by user");
+         }
          if (chunk.text) {
            textAccumulated += chunk.text;
            onChunk(chunk.text);
@@ -157,6 +166,10 @@ export const streamGeminiResponse = async (
       success = true;
 
     } catch (error: any) {
+      if (error.message === "Aborted by user" || signal?.aborted) {
+          throw error; // Re-throw aborts to exit immediately
+      }
+
       console.error(`Gemini API Error (Attempt ${attempts + 1}/${maxAttempts} - KeyIdx ${currentKeyIndex}):`, error);
       
       const isRateLimit = error.message?.includes('429') || 
@@ -166,23 +179,18 @@ export const streamGeminiResponse = async (
       const isOverloaded = error.message?.includes('503') || 
                            error.status === 503;
       
-      // Also rotate on 403 Forbidden (often means key is invalid or quota issue)
       const isForbidden = error.message?.includes('403') || error.status === 403;
 
       attempts++;
 
-      // If rate limited, trigger GLOBAL COOL DOWN
       if (isRateLimit) {
            console.warn("429 Encountered. Triggering Project-Wide Cooldown.");
-           // Set a 60 second cooldown for ALL clients listening to DB
            await setSystemCooldown(Date.now() + 60000);
-           
            onChunk(`⚠️ **Rate Limit Hit**: A 429 error occurred. System entering 60s cooldown.`);
-           success = false; // Stop loop
-           return;
+           success = false; // Stop loop, but consider it "handled" so we don't rotate pointlessly
+           return; 
       }
 
-      // If overloaded or forbidden, try next key
       if (isOverloaded || isForbidden) {
         rotateKey();
         updateTokenUsage(currentKeyIndex, 0); 
@@ -190,9 +198,10 @@ export const streamGeminiResponse = async (
         continue;
       }
 
-      // If we ran out of attempts
+      // If we ran out of attempts or it's a generic error
       if (attempts >= maxAttempts) {
-         onChunk(`\n\n*Error: System exhausted. All ${API_KEYS.length} API keys are currently rate-limited or the system is overloaded. Please wait a moment.*`);
+         onChunk(`\n\n*Error: System exhausted or unknown error. All keys tried. (Last error: ${error.message})*`);
+         return; // Exit function so we don't cycle infinitely
       } else {
          rotateKey();
          await delay(1000);

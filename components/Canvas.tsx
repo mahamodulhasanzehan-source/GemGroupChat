@@ -3,13 +3,15 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CanvasState } from '../types';
 import { updateCanvas } from '../services/firebase';
+import { ChevronDownIcon } from './Icons';
 
 interface CanvasProps {
   canvasState: CanvasState;
   groupId: string;
+  onCloseMobile?: () => void; // Prop to handle back navigation on mobile
 }
 
-const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId }) => {
+const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'terminal'>('preview');
   
   // Refs for scroll sync
@@ -41,10 +43,20 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId }) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#1E1F20] border-l border-[#444746]">
+    <div className="flex flex-col h-full bg-[#1E1F20] border-l border-[#444746] w-full">
       {/* Tabs */}
-      <div className="flex items-center justify-between px-4 pt-2 border-b border-[#444746] bg-[#1E1F20]">
-        <div className="flex">
+      <div className="flex items-center justify-between px-4 pt-2 border-b border-[#444746] bg-[#1E1F20] shrink-0">
+        <div className="flex items-center gap-2">
+            {/* Mobile Back Button */}
+            {onCloseMobile && (
+                <button 
+                    onClick={onCloseMobile}
+                    className="md:hidden p-1 mr-1 text-[#C4C7C5] hover:text-white"
+                >
+                    <ChevronDownIcon className="rotate-90" />
+                </button>
+            )}
+
             <button
             onClick={() => setActiveTab('preview')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -100,9 +112,9 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId }) => {
         {/* Code Mode - Editable (Single File) */}
         <div className={`absolute inset-0 w-full h-full bg-[#1E1F20] flex flex-col transition-opacity duration-300 ${activeTab === 'code' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
              
-             {/* File Header */}
+             {/* File Header - CLEANED: Removed "Single File Component" text */}
              <div className="flex bg-[#131314] border-b border-[#444746] px-4 py-1">
-                 <span className="text-xs font-mono text-[#A8C7FA]">index.html (Single File Component)</span>
+                 <span className="text-xs font-mono text-[#A8C7FA]">index.html</span>
              </div>
 
              {/* Editor Area */}
