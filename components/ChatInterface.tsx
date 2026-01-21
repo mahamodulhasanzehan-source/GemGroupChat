@@ -4,6 +4,8 @@ import { Message } from '../types';
 import { streamGeminiResponse } from '../services/geminiService';
 import { subscribeToMessages, sendMessage, updateMessage, getGroupDetails } from '../services/firebase';
 import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface ChatInterfaceProps {
   currentUser: any;
@@ -78,10 +80,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
         await sendMessage(groupId, initialModelMsg);
 
         // 4. Generate AI Response
-        // We construct history with Explicit Name Prefixes to context
         const history = localMessages.map(m => {
             let content = m.text;
-            // Prepend name to user messages in history for context
             if (m.role === 'user') {
                 content = `[${m.senderName}]: ${m.text}`;
             }
@@ -91,7 +91,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             };
         });
 
-        // Add the current message with name prefix
         const currentPrompt = `[${senderDisplayName}]: ${userMsg.text}`;
 
         let accumulatedText = '';
@@ -107,7 +106,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             }
         );
 
-        // Finalize
         await updateMessage(groupId, modelMsgId, { 
             isLoading: false 
         });
@@ -168,7 +166,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                   
                   {/* Message Content */}
                   <div className={`flex flex-col max-w-[85%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
-                    {/* Name Label - Requested Feature */}
                     <div className="text-xs text-[#C4C7C5] mb-1 px-1 flex gap-2">
                       <span className="font-medium text-[#E3E3E3]">{msg.senderName}</span>
                       <span className="opacity-50">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -182,7 +179,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                              <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce delay-200"></div>
                           </div>
                       ) : (
-                          <ReactMarkdown>{msg.text}</ReactMarkdown>
+                          <ReactMarkdown
+                            components={{
+                              code(props) {
+                                const {children, className, node, ...rest} = props
+                                const match = /language-(\w+)/.exec(className || '')
+                                return match ? (
+                                  <SyntaxHighlighter
+                                    {...rest}
+                                    PreTag="div"
+                                    children={String(children).replace(/\n$/, '')}
+                                    language={match[1]}
+                                    style={vscDarkPlus}
+                                    customStyle={{ margin: 0, borderRadius: '0.5rem', fontSize: '0.9em' }}
+                                  />
+                                ) : (
+                                  <code {...rest} className={className}>
+                                    {children}
+                                  </code>
+                                )
+                              }
+                            }}
+                          >
+                            {msg.text}
+                          </ReactMarkdown>
                       )}
                     </div>
                   </div>
