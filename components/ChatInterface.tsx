@@ -49,6 +49,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   // Token Usage State
   const [tokenUsage, setTokenUsage] = useState<any>({});
   
+  // Ref to track local processing state to prevent duplicate triggers
+  const processingRef = useRef<string | null>(null);
+
   const scrollToBottom = () => {
     if (!editingMessageId) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -114,7 +117,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       const processQueue = async () => {
           const processingId = groupDetails.processingMessageId;
           
-          // 1. Is the AI free?
+          // 1. Is the AI free (according to DB)?
           if (processingId) return; // Busy
 
           // 2. Find next queued message
@@ -123,10 +126,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
           const nextMsg = queuedMessages[0]; // Oldest first
 
-          // 3. Am I the sender?
+          // 3. Local Lock Check: Are we ALREADY processing this specific message locally?
+          // This prevents the useEffect from firing multiple times for the same message before DB updates.
+          if (processingRef.current === nextMsg.id) return;
+
+          // 4. Am I the sender?
           if (nextMsg.senderId === currentUser.uid) {
               console.log("Processing Queue: My Turn", nextMsg.id);
-              await executeGeminiGeneration(nextMsg);
+              
+              // Set local lock immediately
+              processingRef.current = nextMsg.id;
+              
+              try {
+                  await executeGeminiGeneration(nextMsg);
+              } finally {
+                  // Release local lock when done (or if error occurred and handled)
+                  // We check if current ref matches to avoid clearing a subsequent lock
+                  if (processingRef.current === nextMsg.id) {
+                      processingRef.current = null;
+                  }
+              }
           }
       };
 
@@ -138,7 +157,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       if (!groupId) return;
 
       try {
-          // Lock the queue
+          // Lock the queue in DB
           await updateGroup(groupId, { processingMessageId: userMsg.id });
           
           // Update message status to generating
@@ -157,8 +176,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           });
 
           // Build context from history (excluding queued messages and hidden ones?)
-          // Usually AI should see all history even if hidden locally, but let's stick to visible for consistency
-          // Actually, consistency means ignoring 'queued' only.
           const validHistory = localMessages
                 .filter(m => m.status !== 'queued' && m.id !== userMsg.id) 
                 .map(m => ({
@@ -211,7 +228,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           await updateMessage(groupId, modelMsgId, { text: accumulatedText, isLoading: false, status: 'done' });
           await updateMessage(groupId, userMsg.id, { status: 'done' });
           
-          // Release Lock
+          // Release Lock in DB
           await updateGroup(groupId, { processingMessageId: null });
 
       } catch (e) {

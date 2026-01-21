@@ -152,17 +152,19 @@ export const streamGeminiResponse = async (
       console.error(`Gemini API Error (Attempt ${attempts + 1}/${maxAttempts} - KeyIdx ${currentKeyIndex}):`, error);
       
       const isRateLimit = error.message?.includes('429') || 
-                          error.message?.includes('400') ||
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
       
       const isOverloaded = error.message?.includes('503') || 
                            error.status === 503;
+      
+      // Also rotate on 403 Forbidden (often means key is invalid or quota issue)
+      const isForbidden = error.message?.includes('403') || error.status === 403;
 
       attempts++;
 
-      // If rate limited or overloaded, try next key
-      if (isRateLimit || isOverloaded) {
+      // If rate limited, overloaded, or forbidden, try next key
+      if (isRateLimit || isOverloaded || isForbidden) {
         rotateKey();
         // Force update of token usage with 0 tokens just to update the activeKeyIndex in DB/UI
         // This lets the user see that the system is trying a new key
