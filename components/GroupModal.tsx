@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createGroup, isConfigured, getGroupDetails, signOut } from '../services/firebase';
+import { createGroup, isConfigured, getGroupDetails, signOut, checkGroupNameTaken } from '../services/firebase';
 
 interface GroupModalProps {
   isOpen: boolean;
@@ -43,7 +43,17 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
   const handleCreate = async () => {
     if (!groupName.trim() || currentUser?.isAnonymous) return;
     setIsLoading(true);
+    setError('');
+
     try {
+      // Check for uniqueness
+      const isTaken = await checkGroupNameTaken(groupName);
+      if (isTaken) {
+          setError("This Group Name is already taken. Please choose another.");
+          setIsLoading(false);
+          return;
+      }
+
       const groupId = await createGroup(groupName, currentUser.uid);
       const link = `${window.location.origin}/#/group/${groupId}`;
       setShareLink(link);
@@ -144,10 +154,14 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
                                 <input 
                                 type="text" 
                                 value={groupName}
-                                onChange={(e) => setGroupName(e.target.value)}
+                                onChange={(e) => {
+                                    setGroupName(e.target.value);
+                                    setError('');
+                                }}
                                 placeholder="e.g. Project Alpha"
-                                className="w-full bg-[#131314] border border-[#444746] rounded-lg p-3 text-[#E3E3E3] focus:border-[#4285F4] focus:outline-none transition-colors"
+                                className={`w-full bg-[#131314] border ${error ? 'border-red-400' : 'border-[#444746]'} rounded-lg p-3 text-[#E3E3E3] focus:border-[#4285F4] focus:outline-none transition-colors`}
                                 />
+                                {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
                             </div>
                             <div className="flex gap-3 pt-2">
                                 <button 
@@ -161,7 +175,7 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
                                 disabled={!groupName.trim() || isLoading}
                                 className="flex-1 py-2 rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                {isLoading ? 'Creating...' : 'Create'}
+                                {isLoading ? 'Checking...' : 'Create'}
                                 </button>
                             </div>
                         </div>

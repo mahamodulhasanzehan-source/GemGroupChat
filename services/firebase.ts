@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs } from 'firebase/firestore';
 
 // Hardcoded Configuration provided by user
 const firebaseConfig = {
@@ -125,12 +125,36 @@ export const signOut = async () => {
 
 // --- Group & Message Functions ---
 
+export const checkGroupNameTaken = async (name: string): Promise<boolean> => {
+    const normalizedName = name.trim();
+    
+    // Offline Mode Check
+    if (!isConfigured || !db) {
+        return Object.values(mockDb).some((g: any) => 
+            g.details.name.toLowerCase() === normalizedName.toLowerCase()
+        );
+    }
+
+    // Real Mode Check
+    const q = query(collection(db, 'groups'), where('name', '==', normalizedName));
+    const querySnapshot = await getDocs(q);
+    return !querySnapshot.empty;
+};
+
 export const createGroup = async (name: string, creatorId: string): Promise<string> => {
+  const normalizedName = name.trim();
+
+  // Note: We check specifically in GroupModal, but good to have safety here
+  const exists = await checkGroupNameTaken(normalizedName);
+  if (exists) {
+      throw new Error("Group name is already taken");
+  }
+
   // Offline Mode
   if (!isConfigured || !db) {
       const mockId = 'offline-group-' + Date.now();
       mockDb[mockId] = {
-          details: { id: mockId, name, createdBy: creatorId, createdAt: Date.now(), members: [creatorId] },
+          details: { id: mockId, name: normalizedName, createdBy: creatorId, createdAt: Date.now(), members: [creatorId] },
           messages: []
       };
       return mockId;
@@ -138,7 +162,7 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
   
   // Real Mode
   const groupRef = await addDoc(collection(db, 'groups'), {
-    name,
+    name: normalizedName,
     createdBy: creatorId,
     createdAt: Date.now(),
     members: [creatorId]

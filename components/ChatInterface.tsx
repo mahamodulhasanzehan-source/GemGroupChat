@@ -94,19 +94,31 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
         const currentPrompt = `[${senderDisplayName}]: ${userMsg.text}`;
 
         let accumulatedText = '';
+        let lastUpdateTime = 0;
+        // Optimization: Throttle updates to 300ms to reduce write frequency
+        const UPDATE_THROTTLE = 300; 
+
         await streamGeminiResponse(
             currentPrompt,
             history,
             async (chunk) => {
                 accumulatedText += chunk;
-                await updateMessage(groupId, modelMsgId, { 
-                    text: accumulatedText,
-                    isLoading: true 
-                });
+                
+                const now = Date.now();
+                if (now - lastUpdateTime > UPDATE_THROTTLE) {
+                    lastUpdateTime = now;
+                    // We optimistically update UI via subscription, but here we push to DB
+                    await updateMessage(groupId, modelMsgId, { 
+                        text: accumulatedText,
+                        isLoading: true 
+                    });
+                }
             }
         );
 
+        // Final update ensures complete text is saved
         await updateMessage(groupId, modelMsgId, { 
+            text: accumulatedText,
             isLoading: false 
         });
 
@@ -127,7 +139,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   return (
     <div className="flex-1 flex flex-col h-full bg-[#131314] relative overflow-hidden">
       {/* Top Bar */}
-      <div className="h-16 flex items-center justify-between px-6 border-b border-[#444746] bg-[#131314] sticky top-0 z-10 shadow-sm">
+      <div className="h-16 flex items-center justify-between px-6 border-b border-[#444746] bg-[#131314] sticky top-0 z-10 shadow-sm transition-all duration-300">
         <div className="flex items-center gap-2">
           <span className="text-[#E3E3E3] font-medium text-lg tracking-tight animate-[fadeIn_0.5s_ease-out]">{groupName || 'Group Chat'}</span>
           <span className="text-[#C4C7C5] text-sm hidden sm:inline-block cursor-pointer hover:text-white transition-colors">▼</span>
@@ -171,7 +183,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                       <span className="opacity-50">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                     
-                    <div className={`prose prose-invert prose-sm md:prose-base text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-2xl p-3 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20] rounded-tr-none' : 'bg-transparent pl-0'} ${msg.isLoading ? 'animate-pulse' : ''}`}>
+                    <div className={`prose prose-invert prose-sm md:prose-base text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-2xl p-3 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20] rounded-tr-none' : 'bg-transparent pl-0'} ${msg.isLoading ? 'animate-pulse' : ''} transition-all duration-200`}>
                       {msg.isLoading && !msg.text ? (
                           <div className="flex gap-1 mt-2 p-2">
                              <div className="w-2 h-2 bg-[#E3E3E3] rounded-full animate-bounce"></div>
@@ -189,18 +201,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
                                     const { ref, ...restNoRef } = rest as any;
                                     return (
-                                        <SyntaxHighlighter
-                                            {...restNoRef}
-                                            PreTag="div"
-                                            children={String(children).replace(/\n$/, '')}
-                                            language={match[1]}
-                                            style={vscDarkPlus}
-                                            customStyle={{ margin: 0, borderRadius: '0.5rem', fontSize: '0.9em' }}
-                                        />
+                                        <div className="relative group/code my-2 rounded-lg overflow-hidden border border-[#444746]">
+                                            <div className="absolute top-2 right-2 opacity-0 group-hover/code:opacity-100 transition-opacity">
+                                                <button 
+                                                    onClick={() => navigator.clipboard.writeText(String(children))}
+                                                    className="bg-[#333537] text-xs text-white px-2 py-1 rounded hover:bg-[#444746]"
+                                                >
+                                                    Copy
+                                                </button>
+                                            </div>
+                                            <SyntaxHighlighter
+                                                {...restNoRef}
+                                                PreTag="div"
+                                                children={String(children).replace(/\n$/, '')}
+                                                language={match[1]}
+                                                style={vscDarkPlus}
+                                                customStyle={{ margin: 0, padding: '1rem', fontSize: '0.9em' }}
+                                            />
+                                        </div>
                                     );
                                 }
                                 return (
-                                  <code {...rest} className={className}>
+                                  <code {...rest} className={`${className} bg-[#333537] px-1 py-0.5 rounded text-sm`}>
                                     {children}
                                   </code>
                                 )
@@ -222,7 +244,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
       {/* Input Area */}
       <div className="bg-[#131314] p-4 flex justify-center sticky bottom-0 z-20">
-         <div className="w-full max-w-3xl bg-[#1E1F20] rounded-full flex items-center px-4 py-3 gap-3 border border-transparent focus-within:border-[#444746] transition-all duration-200 shadow-lg hover:shadow-xl">
+         <div className="w-full max-w-3xl bg-[#1E1F20] rounded-full flex items-center px-4 py-3 gap-3 border border-transparent focus-within:border-[#444746] transition-all duration-200 shadow-lg hover:shadow-xl hover:bg-[#28292a]">
             <button className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors transform active:scale-95">
                 <ImageUploadIcon />
             </button>
@@ -241,7 +263,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             {input.trim() && (
                 <button 
                   onClick={handleSend}
-                  className="p-2 bg-[#D3E3FD] hover:bg-white text-black rounded-full transition-all duration-200 animate-[fadeIn_0.2s_ease-out] hover:scale-110 active:scale-95 shadow-md"
+                  className="p-2 bg-[#D3E3FD] hover:bg-white text-black rounded-full transition-all duration-200 animate-[zoomIn_0.2s_ease-out] hover:scale-110 active:scale-95 shadow-md"
                 >
                     <SendIcon />
                 </button>
