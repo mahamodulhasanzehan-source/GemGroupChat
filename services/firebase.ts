@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch, limit } from 'firebase/firestore';
 
 // Hardcoded Configuration provided by user
 const firebaseConfig = {
@@ -219,6 +219,20 @@ export const checkGroupNameTaken = async (name: string): Promise<boolean> => {
     const q = query(collection(db, 'groups'), where('name', '==', normalizedName));
     const querySnapshot = await getDocs(q);
     return !querySnapshot.empty;
+};
+
+export const getAllPublicGroups = async () => {
+    // Offline Mode
+    if (!isConfigured || !db) {
+        const groups = Object.values(mockDb).map((g: any) => g.details);
+        return groups.sort((a: any, b: any) => a.name.localeCompare(b.name));
+    }
+
+    // Real Mode
+    // We limit to 100 to prevent overloading, sorted alphabetically
+    const q = query(collection(db, 'groups'), orderBy('name'), limit(100));
+    const querySnapshot = await getDocs(q);
+    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };
 
 export const createGroup = async (name: string, creatorId: string): Promise<string> => {
