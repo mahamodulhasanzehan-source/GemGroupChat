@@ -25,7 +25,6 @@ interface ChatInterfaceProps {
   setIsCanvasCollapsed?: (v: boolean) => void;
 }
 
-// Fix: Update StopIcon to accept className prop to avoid type errors and remove duplicate definition
 const StopIcon = ({ className }: { className?: string }) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className || "w-5 h-5"}>
         <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -166,10 +165,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       
       const unsubscribeGroup = subscribeToGroupDetails(groupId, (details) => {
           setGroupDetails(details);
-          // Auto-close call for local user if it ended remotely
-          if (details && !details.isCallActive && isInCall) {
-              leaveCall();
-          }
 
           if (details && details.processingMessageId === null && abortControllerRef.current) {
                console.log("Processing ID cleared externally, aborting local generation.");
@@ -199,6 +194,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       };
   }, [groupId, currentUser]);
 
+  // New Effect: Watch for Call Termination
+  // This ensures that if the call is ended remotely (isCallActive becomes false),
+  // and we are locally in the call (isInCall is true), we correctly leave.
+  useEffect(() => {
+      if (groupDetails && groupDetails.isCallActive === false && isInCall) {
+          console.log("Call ended remotely, leaving...");
+          leaveCall();
+          alert("The call has been ended by the host.");
+      }
+  }, [groupDetails?.isCallActive, isInCall]);
+
+
   // --- WebRTC Audio Logic (PeerJS) ---
 
   const startCall = async () => {
@@ -214,8 +221,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       if (!groupId) return;
 
       try {
-          // 1. Get Local Stream
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          // 1. Get Local Stream with optimized latency constraints
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+              audio: { 
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true,
+                  channelCount: 1, // Mono is usually faster for VoIP
+                  latency: 0 // Request lowest possible latency
+              } as any
+          });
           localStreamRef.current = stream;
           setIsMuted(false);
 
@@ -230,9 +245,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               setIsInCall(true);
               
               // 4. Connect to existing participants
-              // Note: We need the list of *other* participants.
-              // We rely on GroupDetails update or we can fetch them.
-              // For robustness, in Mesh, usually new joiner calls everyone.
               if (groupDetails?.callParticipants) {
                   groupDetails.callParticipants.forEach(pid => {
                       if (pid !== currentUser.uid) {
@@ -272,10 +284,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const handleCallStream = (call: any) => {
       call.on('stream', (remoteStream: MediaStream) => {
           console.log('Received remote stream');
-          // Update state to render hidden audio element
           setRemoteStreams(prev => [...prev, remoteStream]);
-          
-          // Add to Audio Mixer for Visualizer
           addStreamToMixer(remoteStream);
       });
       call.on('close', () => {
@@ -284,7 +293,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const setupAudioMixing = (localStream: MediaStream) => {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      // Use 'interactive' latency hint for lowest possible audio processing delay
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
+      
       audioContextRef.current = audioCtx;
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 32;
@@ -318,8 +330,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       if (!audioContextRef.current || !analyserRef.current) return;
       try {
         const source = audioContextRef.current.createMediaStreamSource(stream);
-        // Connect to analyser for visualization (do NOT connect to destination to avoid echo/feedback loop, 
-        // as the <audio> element handles playback)
         source.connect(analyserRef.current); 
         sourceNodesRef.current.push(source);
       } catch (e) {
@@ -422,6 +432,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   url = base64ToWav(base64);
                   setAudioCache(prev => ({ ...prev, [cacheKey]: url }));
               }
+          } catch (e) {
+              alert("Failed to generate speech. Please check Key 5 configuration.");
           } finally {
               setGeneratingAudioIds(prev => {
                   const next = new Set(prev);
@@ -1040,6 +1052,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   <audio 
                     key={idx} 
                     autoPlay 
+                    playsInline
+                    controls={false}
                     ref={audioEl => {
                         if (audioEl) audioEl.srcObject = stream;
                     }} 
@@ -1181,6 +1195,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             <div className="py-1">
                                 <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C]">Text Generation</div>
                                 {keyList.filter(k => !k.isTTS).map((k) => (
+                                    <button
+                                        key={k.index}
+                                        onClick={() => handleKeySelect(k.index)}
+                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] smooth-transition
+                                            ${k.isActive ? 'bg-[#333537/50]' : ''}
+                                            ${k.isRateLimited ? 'text-yellow-500' : 'text-[#C4C7C5]'}
+                                        `}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <span className={`w-1.5 h-1.5 rounded-full ${k.isActive ? 'bg-[#4285F4]' : 'bg-transparent'}`}></span>
+                                            <span className="font-mono">Key {k.index + 1}</span>
+                                            {k.isRateLimited && <span className="text-[10px] bg-yellow-900/30 px-1 rounded border border-yellow-700/50">429</span>}
+                                        </div>
+                                        <span className="font-mono text-[10px] opacity-70">{formatTokenCount(k.usage)}</span>
+                                    </button>
+                                ))}
+
+                                <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C] mt-1">Speech (TTS)</div>
+                                {keyList.filter(k => k.isTTS).map((k) => (
                                     <button
                                         key={k.index}
                                         onClick={() => handleKeySelect(k.index)}
