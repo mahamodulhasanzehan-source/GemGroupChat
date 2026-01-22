@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon, XMarkIcon, MenuIcon, CodeBracketIcon } from './Icons';
 import { Message, CanvasState, Presence, Group, UserChatMessage } from '../types';
@@ -9,11 +8,10 @@ import {
     subscribeToCanvas, updateCanvas, 
     subscribeToPresence, updatePresence, setGroupLock,
     subscribeToUserChat, sendUserChatMessage, deleteUserChatMessage,
-    setGroupCallState, joinCallSession, leaveCallSession, endGroupCall
 } from '../services/firebase';
+import { useGroupCall } from '../hooks/useGroupCall';
 import ReactMarkdown from 'react-markdown';
 import Canvas from './Canvas';
-import Peer from 'peerjs';
 
 interface ChatInterfaceProps {
   currentUser: any;
@@ -24,7 +22,7 @@ interface ChatInterfaceProps {
   playbackSpeed?: number;
   isCanvasCollapsed?: boolean;
   setIsCanvasCollapsed?: (v: boolean) => void;
-  onOpenSidebar?: () => void; // New prop for mobile sidebar toggle
+  onOpenSidebar?: () => void;
 }
 
 const StopIcon = ({ className }: { className?: string }) => (
@@ -51,35 +49,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     isCanvasCollapsed = true, setIsCanvasCollapsed,
     onOpenSidebar
 }) => {
-  // Input states
   const [input, setInput] = useState('');
   const [userChatInput, setUserChatInput] = useState('');
-
-  // Messages State
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
   const [userChatMessages, setUserChatMessages] = useState<UserChatMessage[]>([]);
-  
   const [groupDetails, setGroupDetails] = useState<Group | null>(null);
   const [isSending, setIsSending] = useState(false);
-  
-  // Notification State
   const [unreadUserCount, setUnreadUserCount] = useState(0);
   const [hasAIUpdate, setHasAIUpdate] = useState(false);
   
-  // Call State
-  const [isInCall, setIsInCall] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [visualizerData, setVisualizerData] = useState<number[]>(new Array(5).fill(10));
-  const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
-
-  // WebRTC Refs
-  const peerRef = useRef<Peer | null>(null);
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const callsRef = useRef<any[]>([]); // Track active PeerJS calls
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const sourceNodesRef = useRef<MediaStreamAudioSourceNode[]>([]);
+  // Call Logic Extracted to Hook
+  const { 
+      isInCall, isMuted, visualizerData, remoteStreams, 
+      leaveCall, toggleMute, handleCallAction, handleEndForEveryone 
+  } = useGroupCall({ currentUser, groupId, groupDetails });
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -90,13 +73,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [showOnlineUsers, setShowOnlineUsers] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Presence[]>([]);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
-  
-  // Chat Mode: 'ai' | 'user' | 'both'
   const [chatMode, setChatMode] = useState<'ai' | 'user' | 'both'>('ai');
-
   const [hiddenMessageIds, setHiddenMessageIds] = useState<Set<string>>(new Set());
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-
   const [canvasState, setCanvasState] = useState<CanvasState>({ html: '', css: '', js: '', lastUpdated: 0, terminalOutput: [] });
   const [tokenUsage, setTokenUsage] = useState<any>({});
   
@@ -193,200 +172,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           unsubscribeCanvas();
           unsubscribePresence();
           clearInterval(heartbeat);
-          if (isInCall) leaveCall(); 
+          // leaveCall handles cleanup internally in hook, but redundancy is okay
       };
   }, [groupId, currentUser]);
-
-  // --- WebRTC Audio Logic (PeerJS) ---
-  useEffect(() => {
-      if (groupDetails && groupDetails.isCallActive === false && isInCall) {
-          console.log("Call ended remotely, leaving...");
-          leaveCall();
-          alert("The call has been ended by the host.");
-      }
-  }, [groupDetails?.isCallActive, isInCall]);
-
-  const handleCallAction = async () => {
-      if (!groupId) return;
-      
-      // If call is active, JOIN it instead of restarting it
-      if (groupDetails?.isCallActive) {
-          await joinCall();
-          return;
-      }
-
-      // Start new call
-      if (confirm("Start a group call?")) {
-          // Initialize call state in Firestore
-          await setGroupCallState(groupId, true, currentUser.uid);
-          joinCall();
-      }
-  };
-
-  const joinCall = async () => {
-      if (!groupId) return;
-
-      try {
-          const constraints: any = {
-              audio: { 
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true,
-                  channelCount: 1, // Mono is faster
-                  latency: 0, // Lowest latency hint
-                  sampleRate: 48000 // Standard
-              }
-          };
-
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          localStreamRef.current = stream;
-          setIsMuted(false);
-
-          const peer = new Peer(currentUser.uid); // Use UID as Peer ID
-          peerRef.current = peer;
-
-          peer.on('open', async (id) => {
-              console.log('My peer ID is: ' + id);
-              // 3. Register presence in call
-              await joinCallSession(groupId, currentUser.uid);
-              setIsInCall(true);
-              
-              if (groupDetails?.callParticipants) {
-                  groupDetails.callParticipants.forEach(pid => {
-                      if (pid !== currentUser.uid) {
-                          connectToPeer(pid, stream);
-                      }
-                  });
-              }
-          });
-
-          peer.on('call', (call) => {
-              console.log('Incoming call from:', call.peer);
-              call.answer(stream); 
-              handleCallStream(call);
-              callsRef.current.push(call);
-          });
-          
-          setupAudioMixing(stream);
-
-      } catch (e) {
-          console.error("Failed to join call", e);
-          alert("Could not access microphone or connect to peer server.");
-      }
-  };
-
-  const connectToPeer = (peerId: string, stream: MediaStream) => {
-      if (!peerRef.current) return;
-      console.log('Calling peer:', peerId);
-      const call = peerRef.current.call(peerId, stream);
-      if (call) {
-        handleCallStream(call);
-        callsRef.current.push(call);
-      }
-  };
-
-  const handleCallStream = (call: any) => {
-      call.on('stream', (remoteStream: MediaStream) => {
-          console.log('Received remote stream');
-          setRemoteStreams(prev => [...prev, remoteStream]);
-          addStreamToMixer(remoteStream);
-      });
-      call.on('close', () => {
-           // Handle peer disconnect if needed
-      });
-  };
-
-  const setupAudioMixing = (localStream: MediaStream) => {
-      // Use 'interactive' latency hint for lowest possible audio processing delay
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioContextClass({ latencyHint: 'interactive', sampleRate: 48000 });
-      
-      audioContextRef.current = audioCtx;
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 32;
-      analyserRef.current = analyser;
-
-      const masterGain = audioCtx.createGain();
-      masterGain.connect(analyser);
-
-      const localSource = audioCtx.createMediaStreamSource(localStream);
-      localSource.connect(masterGain);
-      sourceNodesRef.current.push(localSource);
-
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const updateVisualizer = () => {
-          if (!analyserRef.current) return;
-          analyserRef.current.getByteFrequencyData(dataArray);
-          
-          const points = [dataArray[0], dataArray[2], dataArray[4], dataArray[6], dataArray[8]]
-              .map(val => Math.max(10, val / 2.55));
-
-          setVisualizerData(points);
-          animationFrameRef.current = requestAnimationFrame(updateVisualizer);
-      };
-      updateVisualizer();
-  };
-
-  const addStreamToMixer = (stream: MediaStream) => {
-      if (!audioContextRef.current || !analyserRef.current) return;
-      try {
-        const source = audioContextRef.current.createMediaStreamSource(stream);
-        source.connect(analyserRef.current); 
-        sourceNodesRef.current.push(source);
-      } catch (e) {
-          console.error("Error adding stream to mixer", e);
-      }
-  };
-
-  const leaveCall = async () => {
-      if (localStreamRef.current) {
-          localStreamRef.current.getTracks().forEach(track => track.stop());
-          localStreamRef.current = null;
-      }
-      
-      if (audioContextRef.current) {
-          audioContextRef.current.close();
-          audioContextRef.current = null;
-      }
-      if (animationFrameRef.current) {
-          cancelAnimationFrame(animationFrameRef.current);
-          animationFrameRef.current = null;
-      }
-      sourceNodesRef.current = [];
-
-      callsRef.current.forEach(call => call.close());
-      callsRef.current = [];
-      if (peerRef.current) {
-          peerRef.current.destroy();
-          peerRef.current = null;
-      }
-      
-      setRemoteStreams([]);
-      setIsInCall(false);
-      setVisualizerData(new Array(5).fill(10));
-
-      if (groupId) {
-          await leaveCallSession(groupId, currentUser.uid);
-      }
-  };
-
-  const handleEndForEveryone = async () => {
-      if (confirm("Do you want to end the call for everyone?")) {
-          if (groupId) {
-              await endGroupCall(groupId);
-          }
-      }
-  };
-
-  const toggleMute = () => {
-      if (localStreamRef.current) {
-          localStreamRef.current.getAudioTracks().forEach(track => {
-              track.enabled = !track.enabled;
-          });
-          setIsMuted(!isMuted);
-      }
-  };
-
 
   // Audio Player Logic (TTS)
   const handlePlayAudio = async (msg: Message) => {
@@ -757,7 +545,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 return (
                     <div 
                         key={msg.id} 
-                        className={`group relative flex gap-3 ${isUserRole ? 'flex-row-reverse' : 'flex-row'} smooth-transition animate-[fadeIn_0.5s_ease-out]`}
+                        className={`group relative flex gap-3 ${isUserRole ? 'flex-row-reverse' : 'flex-row'} smooth-transition animate-fade-in`}
                         onMouseEnter={() => setHoveredMessageId(msg.id)}
                         onMouseLeave={() => setHoveredMessageId(null)}
                     >
@@ -940,7 +728,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       {userChatMessages.map((msg) => {
                           const isMe = msg.senderId === currentUser.uid;
                           return (
-                              <div key={msg.id} className={`flex gap-3 animate-[fadeIn_0.3s_ease-out] group/msg ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                              <div key={msg.id} className={`flex gap-3 animate-fade-in group/msg ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
                                   <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shrink-0 overflow-hidden border border-[#444746]">
                                       {msg.photoURL ? (
                                           <img src={msg.photoURL} alt={msg.senderName} className="w-full h-full object-cover" />
@@ -984,13 +772,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               
               {/* Join Call Banner */}
               {!isInCall && groupDetails?.isCallActive && (
-                  <div className="mb-2 bg-[#2A2B2D] border border-[#4285F4] rounded-lg p-2 flex items-center justify-between animate-[fadeIn_0.3s_ease-out]">
+                  <div className="mb-2 bg-[#2A2B2D] border border-[#4285F4] rounded-lg p-2 flex items-center justify-between animate-fade-in">
                       <div className="flex items-center gap-2 text-xs text-[#E3E3E3]">
                            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                            <span>Join the call</span>
                       </div>
                       <button 
-                          onClick={joinCall}
+                          onClick={handleCallAction}
                           className="px-3 py-1 bg-[#4285F4] text-white text-xs font-medium rounded-md hover:bg-[#3367D6]"
                       >
                           Join
@@ -1172,7 +960,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         {onlineUsers.length}
                     </button>
                     {showOnlineUsers && (
-                        <div className="absolute top-full right-0 mt-2 w-48 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
+                        <div className="absolute top-full right-0 mt-2 w-48 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-fade-in">
                             <div className="max-h-40 overflow-y-auto">
                                 {onlineUsers.map(u => (
                                     <div key={u.uid} className="px-3 py-2 text-xs text-[#C4C7C5] flex items-center gap-2 hover:bg-[#333537] smooth-transition">
@@ -1201,7 +989,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </button>
 
                     {showKeyDropdown && (
-                        <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
+                        <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-fade-in">
                             <div className="py-1">
                                 <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C]">Text Generation</div>
                                 {keyList.filter(k => !k.isTTS).map((k) => (
@@ -1310,8 +1098,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
       )}
 
-      {/* Mobile Canvas Overlay */}
-      <div className={`md:hidden fixed inset-0 z-50 bg-[#1E1F20] transition-transform duration-300 ${mobileView === 'canvas' ? 'translate-y-0' : 'translate-y-full'}`}>
+      {/* Mobile Canvas Overlay - Optimized for GPU Animation */}
+      <div 
+        className={`md:hidden fixed inset-0 z-50 bg-[#1E1F20] smooth-transition ${mobileView === 'canvas' ? 'slide-up-enter-active' : 'slide-up-enter'}`}
+        style={{ transitionDuration: '0.6s' }}
+      >
           <Canvas 
              canvasState={canvasState} 
              groupId={groupId || 'demo'} 

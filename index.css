@@ -1,0 +1,92 @@
+/* Global Styles and Animations */
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #131314;
+  color: #E3E3E3;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Prevent body scroll, handle in containers */
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #444746;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #5E5E5E;
+}
+
+/* Gemini Gradient Text */
+.gemini-gradient-text {
+  background: linear-gradient(74deg, #4285F4 0%, #9B72CB 9%, #D96570 20%, #D96570 24%, #9B72CB 35%, #4285F4 44%, #9B72CB 50%, #D96570 56%, #131314 75%, #131314 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-size: 400% 100%;
+  animation: gradientMove 10s ease infinite;
+}
+
+@keyframes gradientMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* 
+   High-Performance Animations 
+   Using cubic-bezier(0.19, 1, 0.22, 1) for that "premium" feel.
+   It starts fast and decelerates smoothly.
+*/
+
+.smooth-transition {
+  transition-property: transform, opacity, width, height, background-color, border-color, left, right, top, bottom;
+  transition-timing-function: cubic-bezier(0.19, 1, 0.22, 1); 
+  transition-duration: 600ms;
+}
+
+/* Specific Animation Utilities */
+
+/* For elements appearing */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fadeIn 0.4s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+
+/* Slide Up (Mobile Drawer/Canvas) */
+.slide-up-enter {
+  transform: translateY(100%);
+}
+.slide-up-enter-active {
+  transform: translateY(0);
+}
+.slide-up-exit {
+  transform: translateY(0);
+}
+.slide-up-exit-active {
+  transform: translateY(100%);
+}
+
+/* Slide Right (Mobile Sidebar) */
+.slide-right-enter {
+  transform: translateX(-100%);
+}
+.slide-right-enter-active {
+  transform: translateX(0);
+}
+
+/* General Layout Transitions */
+div {
+   transition-property: width, height, background-color, border-color, opacity, transform;
+   transition-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+   transition-duration: 400ms; /* Slightly faster for layout shifts */
+}

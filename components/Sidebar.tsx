@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { PlusIcon, UserGroupIcon, MenuIcon, TrashIcon, XMarkIcon, PencilIcon } from './Icons';
 import { updateUserProfile, subscribeToUserGroups, deleteGroupFull, signOut } from '../services/firebase';
@@ -7,10 +6,8 @@ import { useNavigate } from 'react-router-dom';
 interface SidebarProps {
   isCollapsed: boolean;
   setIsCollapsed: (v: boolean) => void;
-  // Mobile props
   mobileOpen?: boolean;
   setMobileOpen?: (v: boolean) => void;
-  // General props
   onCreateGroup: () => void;
   onJoinGroup: () => void;
   currentUser: any;
@@ -52,7 +49,6 @@ const Sidebar: React.FC<SidebarProps> = ({
       return () => unsubscribe();
   }, [currentUser]);
 
-  // Profile Modal Escape Key Listener
   useEffect(() => {
       const handleEsc = (e: KeyboardEvent) => {
           if (e.key === 'Escape') setIsProfileModalOpen(false);
@@ -61,7 +57,6 @@ const Sidebar: React.FC<SidebarProps> = ({
       return () => window.removeEventListener('keydown', handleEsc);
   }, [isProfileModalOpen]);
 
-  // Reset logout state on open
   useEffect(() => {
     if (isProfileModalOpen) setShowLogoutConfirm(false);
   }, [isProfileModalOpen]);
@@ -124,29 +119,26 @@ const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <div className="px-3 pb-4 space-y-2 smooth-transition shrink-0">
-        {/* Create Group - Primary Action */}
         <button 
           onClick={() => { onCreateGroup(); if(setMobileOpen) setMobileOpen(false); }}
           className={`flex items-center gap-3 bg-[#1A1A1C] hover:bg-[#282A2C] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 border border-[#444746] smooth-transition ${isCollapsed ? 'md:justify-center md:px-2' : ''}`}
         >
           <PlusIcon />
-          <span className={`${isCollapsed ? 'md:hidden' : ''} text-sm font-medium animate-[fadeIn_0.5s_ease-out]`}>Create Group</span>
+          <span className={`${isCollapsed ? 'md:hidden' : ''} text-sm font-medium animate-fade-in`}>Create Group</span>
         </button>
 
-        {/* Join Group - Secondary Action */}
         <button 
           onClick={() => { onJoinGroup(); if(setMobileOpen) setMobileOpen(false); }}
           className={`flex items-center gap-3 hover:bg-[#333537] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 smooth-transition ${isCollapsed ? 'md:justify-center md:px-2' : ''}`}
         >
           <UserGroupIcon />
-          <span className={`${isCollapsed ? 'md:hidden' : ''} text-sm font-medium animate-[fadeIn_0.5s_ease-out]`}>Join a group</span>
+          <span className={`${isCollapsed ? 'md:hidden' : ''} text-sm font-medium animate-fade-in`}>Join a group</span>
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 space-y-6 smooth-transition">
         {(!isCollapsed || mobileOpen) && (
-             <div className="animate-[fadeIn_0.5s_ease-out]">
-                {/* Created By Me */}
+             <div className="animate-fade-in">
                 <div>
                     <h3 className="text-xs font-semibold text-[#C4C7C5] uppercase tracking-wider mb-2 px-2">Created by me</h3>
                     {createdGroups.length === 0 ? (
@@ -172,7 +164,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                     )}
                 </div>
 
-                {/* Joined Groups */}
                 <div className="mt-6">
                     <h3 className="text-xs font-semibold text-[#C4C7C5] uppercase tracking-wider mb-2 px-2">Joined Groups</h3>
                      {joinedGroups.length === 0 ? (
@@ -200,7 +191,6 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={`flex items-center gap-2 mt-2 p-2 rounded-lg cursor-pointer hover:bg-[#333537] transition-colors smooth-transition ${isCollapsed ? 'md:justify-center' : ''}`}
             onClick={() => setIsProfileModalOpen(true)}
         >
-           {/* User Profile Mini */}
            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center text-xs font-bold text-white shrink-0 overflow-hidden">
                {currentUser?.photoURL ? (
                    <img src={currentUser.photoURL} alt="User" className="w-full h-full object-cover" />
@@ -209,7 +199,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                )}
            </div>
            
-           <div className={`${isCollapsed ? 'md:hidden' : ''} flex flex-col flex-1 overflow-hidden animate-[fadeIn_0.3s_ease-out]`}>
+           <div className={`${isCollapsed ? 'md:hidden' : ''} flex flex-col flex-1 overflow-hidden animate-fade-in`}>
                 <span className="text-sm text-[#E3E3E3] truncate font-medium" title={currentUser?.displayName}>
                     {currentUser?.displayName || 'Guest User'}
                 </span>
@@ -222,28 +212,24 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      {/* Desktop Sidebar */}
       <div className={`hidden md:flex flex-col h-full bg-[#1E1F20] smooth-transition ${isCollapsed ? 'w-[72px]' : 'w-[280px]'} border-r border-[#444746] relative`}>
         {sidebarContent}
       </div>
 
-      {/* Mobile Drawer */}
+      {/* Mobile Drawer with Smooth Slide-Right Animation */}
       <div className={`md:hidden fixed inset-0 z-50 pointer-events-none ${mobileOpen ? 'pointer-events-auto' : ''}`}>
-           {/* Backdrop */}
            <div 
-             className={`absolute inset-0 bg-black/60 transition-opacity duration-300 ${mobileOpen ? 'opacity-100' : 'opacity-0'}`}
+             className={`absolute inset-0 bg-black/60 smooth-transition ${mobileOpen ? 'opacity-100' : 'opacity-0'}`}
              onClick={() => setMobileOpen && setMobileOpen(false)}
            />
            
-           {/* Sidebar Panel */}
-           <div className={`absolute top-0 bottom-0 left-0 w-[85%] max-w-[300px] bg-[#1E1F20] border-r border-[#444746] shadow-2xl transition-transform duration-300 flex flex-col ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+           <div className={`absolute top-0 bottom-0 left-0 w-[85%] max-w-[300px] bg-[#1E1F20] border-r border-[#444746] shadow-2xl flex flex-col smooth-transition ${mobileOpen ? 'slide-right-enter-active' : 'slide-right-enter'}`}>
                {sidebarContent}
            </div>
       </div>
 
-      {/* --- Profile Settings Modal --- */}
       {isProfileModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.5s_ease-out]">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
               <div className="bg-[#1E1F20] border border-[#444746] rounded-2xl w-full max-w-sm p-6 shadow-2xl relative smooth-transition">
                   <button 
                       onClick={() => setIsProfileModalOpen(false)}
@@ -254,7 +240,6 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                   <h2 className="text-lg font-medium text-[#E3E3E3] mb-6">Profile & Settings</h2>
                   
-                  {/* Avatar Section */}
                   <div className="flex flex-col items-center mb-6">
                       <div className="relative">
                           <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center text-2xl font-bold text-white overflow-hidden mb-4 border-2 border-[#444746]">
@@ -265,7 +250,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                             )}
                           </div>
                           
-                          {/* Custom Avatar Upload Button */}
                           <button 
                              onClick={handleCustomAvatar}
                              className="absolute bottom-4 right-0 p-1.5 bg-[#4285F4] text-white rounded-full hover:bg-[#3367D6] border border-[#1E1F20] shadow-sm smooth-transition hover:scale-110"
@@ -275,7 +259,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                           </button>
                       </div>
                       
-                      {/* Name Edit */}
                       {isEditingName ? (
                         <div className="flex items-center gap-2 mb-4 w-full justify-center">
                             <input 
@@ -296,7 +279,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                       )}
 
-                      {/* Avatar Picker */}
                       <div className="flex gap-2 justify-center">
                           {AVATAR_PRESETS.map((url, i) => (
                               <button 
@@ -312,9 +294,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                   <hr className="border-[#444746] mb-6" />
 
-                  {/* AI Settings */}
                   <div className="space-y-5">
-                      {/* Voice Selection */}
                       <div className="space-y-2">
                           <label className="text-xs text-[#C4C7C5] font-medium uppercase tracking-wider">AI Voice</label>
                           <div className="relative">
@@ -333,7 +313,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                           </div>
                       </div>
 
-                      {/* Playback Speed */}
                       <div className="space-y-2">
                           <div className="flex justify-between items-center">
                             <label className="text-xs text-[#C4C7C5] font-medium uppercase tracking-wider">Playback Speed</label>
@@ -356,7 +335,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                       </div>
                   </div>
 
-                  {/* Sign Out Section */}
                   {!currentUser?.isAnonymous && (
                       <div className="mt-4 pt-4 border-t border-[#444746]">
                           {!showLogoutConfirm ? (
@@ -367,7 +345,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                   Log Out
                               </button>
                           ) : (
-                              <div className="bg-[#2A0000] border border-red-900/50 rounded-lg p-3 text-center animate-[fadeIn_0.3s_ease-out]">
+                              <div className="bg-[#2A0000] border border-red-900/50 rounded-lg p-3 text-center animate-fade-in">
                                   <p className="text-xs text-red-200 mb-3">Are you sure you want to log out?</p>
                                   <div className="flex gap-2">
                                       <button 
