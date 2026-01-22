@@ -1,7 +1,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch, limit } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch, limit, arrayUnion, arrayRemove } from 'firebase/firestore';
 
 // Hardcoded Configuration provided by user
 const firebaseConfig = {
@@ -253,7 +253,17 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
   if (!isConfigured || !db) {
       const mockId = 'offline-group-' + Date.now();
       mockDb[mockId] = {
-          details: { id: mockId, name: normalizedName, createdBy: creatorId, createdAt: Date.now(), members: [creatorId], processingMessageId: null, isCallActive: false },
+          details: { 
+              id: mockId, 
+              name: normalizedName, 
+              createdBy: creatorId, 
+              createdAt: Date.now(), 
+              members: [creatorId], 
+              processingMessageId: null, 
+              isCallActive: false,
+              callStartedBy: null,
+              callParticipants: []
+          },
           messages: []
       };
       // Init Canvas for group
@@ -269,7 +279,9 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
     createdAt: Date.now(),
     members: [creatorId],
     processingMessageId: null,
-    isCallActive: false
+    isCallActive: false,
+    callStartedBy: null,
+    callParticipants: []
   });
   // Init Canvas State
   await setDoc(doc(db, 'groups', groupRef.id, 'canvas', 'current'), {
@@ -318,14 +330,87 @@ export const updateGroup = async (groupId: string, updates: any) => {
     await updateDoc(doc(db, 'groups', groupId), updates);
 };
 
-export const setGroupCallState = async (groupId: string, isActive: boolean) => {
+export const setGroupCallState = async (groupId: string, isActive: boolean, userId?: string) => {
     if (!isConfigured || !db) {
         if (mockDb[groupId]) {
             mockDb[groupId].details.isCallActive = isActive;
+            if (isActive && userId) {
+                 mockDb[groupId].details.callStartedBy = userId;
+                 mockDb[groupId].details.callParticipants = [userId];
+            } else if (!isActive) {
+                 mockDb[groupId].details.callParticipants = [];
+            }
         }
         return;
     }
-    await updateDoc(doc(db, 'groups', groupId), { isCallActive: isActive });
+    
+    const updates: any = { isCallActive: isActive };
+    if (isActive && userId) {
+        updates.callStartedBy = userId;
+        updates.callParticipants = [userId]; // Reset participants on new call start
+    } else if (!isActive) {
+        updates.callParticipants = [];
+    }
+    await updateDoc(doc(db, 'groups', groupId), updates);
+}
+
+export const joinCallSession = async (groupId: string, userId: string) => {
+    if (!isConfigured || !db) {
+        if (mockDb[groupId]) {
+            if (!mockDb[groupId].details.callParticipants) mockDb[groupId].details.callParticipants = [];
+            if (!mockDb[groupId].details.callParticipants.includes(userId)) {
+                 mockDb[groupId].details.callParticipants.push(userId);
+            }
+        }
+        return;
+    }
+    await updateDoc(doc(db, 'groups', groupId), {
+        callParticipants: arrayUnion(userId)
+    });
+}
+
+export const leaveCallSession = async (groupId: string, userId: string) => {
+    if (!isConfigured || !db) {
+        if (mockDb[groupId] && mockDb[groupId].details.callParticipants) {
+             const idx = mockDb[groupId].details.callParticipants.indexOf(userId);
+             if (idx > -1) mockDb[groupId].details.callParticipants.splice(idx, 1);
+             // Auto Close
+             if (mockDb[groupId].details.callParticipants.length === 0) {
+                 mockDb[groupId].details.isCallActive = false;
+             }
+        }
+        return;
+    }
+    
+    const groupRef = doc(db, 'groups', groupId);
+    // Remove user
+    await updateDoc(groupRef, {
+        callParticipants: arrayRemove(userId)
+    });
+
+    // Check if empty (Auto-Close Logic)
+    // There is a slight race condition here in high traffic but okay for this app
+    const snap = await getDoc(groupRef);
+    if (snap.exists()) {
+        const data = snap.data();
+        if (data.callParticipants && data.callParticipants.length === 0) {
+            await updateDoc(groupRef, { isCallActive: false });
+        }
+    }
+}
+
+export const endGroupCall = async (groupId: string) => {
+     if (!isConfigured || !db) {
+         if (mockDb[groupId]) {
+             mockDb[groupId].details.isCallActive = false;
+             mockDb[groupId].details.callParticipants = [];
+         }
+         return;
+     }
+     await updateDoc(doc(db, 'groups', groupId), {
+         isCallActive: false,
+         callParticipants: []
+     });
 }
 
 // Real-time AI Chat Subscription

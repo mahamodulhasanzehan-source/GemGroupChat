@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon } from './Icons';
+import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon, XMarkIcon } from './Icons';
 import { Message, CanvasState, Presence, Group, UserChatMessage } from '../types';
 import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS, base64ToWav } from '../services/geminiService';
 import { 
@@ -8,10 +8,11 @@ import {
     subscribeToCanvas, updateCanvas, 
     subscribeToPresence, updatePresence, setGroupLock,
     subscribeToUserChat, sendUserChatMessage, deleteUserChatMessage,
-    setGroupCallState
+    setGroupCallState, joinCallSession, leaveCallSession, endGroupCall
 } from '../services/firebase';
 import ReactMarkdown from 'react-markdown';
 import Canvas from './Canvas';
+import Peer from 'peerjs';
 
 interface ChatInterfaceProps {
   currentUser: any;
@@ -24,8 +25,9 @@ interface ChatInterfaceProps {
   setIsCanvasCollapsed?: (v: boolean) => void;
 }
 
-const StopIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+// Fix: Update StopIcon to accept className prop to avoid type errors and remove duplicate definition
+const StopIcon = ({ className }: { className?: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className || "w-5 h-5"}>
         <rect x="6" y="6" width="12" height="12" rx="2" />
     </svg>
 );
@@ -65,11 +67,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   // Call State
   const [isInCall, setIsInCall] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [visualizerData, setVisualizerData] = useState<number[]>(new Array(5).fill(10)); // 5 bars
+  const [visualizerData, setVisualizerData] = useState<number[]>(new Array(5).fill(10));
+  const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
+
+  // WebRTC Refs
+  const peerRef = useRef<Peer | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const callsRef = useRef<any[]>([]); // Track active PeerJS calls
   const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const sourceNodesRef = useRef<MediaStreamAudioSourceNode[]>([]);
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -116,7 +124,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }, [userChatMessages, chatMode]);
 
   // --- Notification Logic ---
-  // Reset notifications when switching to the relevant tab
   useEffect(() => {
       if (chatMode === 'user' || chatMode === 'both') {
           setUnreadUserCount(0);
@@ -126,23 +133,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
   }, [chatMode]);
 
-  // Listen for new user messages to trigger notification
   useEffect(() => {
       if (userChatMessages.length > 0) {
           const lastMsg = userChatMessages[userChatMessages.length - 1];
-          // If I am NOT the sender, and I am currently in 'ai' mode (so I can't see the user chat)
           if (lastMsg.senderId !== currentUser.uid && chatMode === 'ai') {
               setUnreadUserCount(prev => prev + 1);
           }
       }
   }, [userChatMessages]);
 
-  // Listen for new AI/Canvas updates to trigger notification
   useEffect(() => {
-      // Logic: If there is a new AI message or Canvas update while I'm in 'user' mode
       if (localMessages.length > 0) {
            const lastMsg = localMessages[localMessages.length - 1];
-           // Simple check: if latest message is from model or system, and we are in user mode
            if ((lastMsg.role === 'model' || lastMsg.role === 'system') && chatMode === 'user') {
                setHasAIUpdate(true);
            }
@@ -164,7 +166,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       
       const unsubscribeGroup = subscribeToGroupDetails(groupId, (details) => {
           setGroupDetails(details);
-          // If call ends remotely, kick out of call view locally
+          // Auto-close call for local user if it ended remotely
           if (details && !details.isCallActive && isInCall) {
               leaveCall();
           }
@@ -179,19 +181,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       });
       
       const unsubscribeMsgs = subscribeToMessages(groupId, (msgs) => setLocalMessages(msgs));
-      
-      // Subscribe to User Chat
       const unsubscribeUserChat = subscribeToUserChat(groupId, (msgs) => setUserChatMessages(msgs));
-
-      const unsubscribeCanvas = subscribeToCanvas(groupId, (data) => {
-          if (data) setCanvasState(data);
-      });
-
+      const unsubscribeCanvas = subscribeToCanvas(groupId, (data) => { if (data) setCanvasState(data); });
       const unsubscribePresence = subscribeToPresence(groupId, (users) => setOnlineUsers(users));
 
-      const heartbeat = setInterval(() => {
-          updatePresence(groupId, currentUser);
-      }, 60000); 
+      const heartbeat = setInterval(() => { updatePresence(groupId, currentUser); }, 60000); 
       updatePresence(groupId, currentUser); 
 
       return () => {
@@ -201,69 +195,146 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           unsubscribeCanvas();
           unsubscribePresence();
           clearInterval(heartbeat);
-          if (isInCall) leaveCall(); // cleanup on unmount
+          if (isInCall) leaveCall(); 
       };
   }, [groupId, currentUser]);
 
-  // --- Call Logic & Audio Visualizer ---
+  // --- WebRTC Audio Logic (PeerJS) ---
 
   const startCall = async () => {
       if (!groupId) return;
       if (confirm("Do you want to execute the call?")) {
-          await setGroupCallState(groupId, true);
+          // Initialize call state in Firestore
+          await setGroupCallState(groupId, true, currentUser.uid);
           joinCall();
       }
   };
 
   const joinCall = async () => {
-      try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          mediaStreamRef.current = stream;
-          
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          audioContextRef.current = audioCtx;
-          const analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 32;
-          analyserRef.current = analyser;
+      if (!groupId) return;
 
-          const source = audioCtx.createMediaStreamSource(stream);
-          source.connect(analyser);
-          
-          setIsInCall(true);
+      try {
+          // 1. Get Local Stream
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          localStreamRef.current = stream;
           setIsMuted(false);
 
-          // Start Visualizer Loop
-          const dataArray = new Uint8Array(analyser.frequencyBinCount);
-          const updateVisualizer = () => {
-              if (!analyserRef.current) return;
-              analyserRef.current.getByteFrequencyData(dataArray);
-              
-              // Map frequency data to 5 bars roughly
-              // We just take a few sample points for the "dots"
-              const points = [
-                  dataArray[0], 
-                  dataArray[2], 
-                  dataArray[4], 
-                  dataArray[6], 
-                  dataArray[8]
-              ].map(val => Math.max(10, val / 2)); // Normalize height
+          // 2. Initialize Peer
+          const peer = new Peer(currentUser.uid); // Use UID as Peer ID
+          peerRef.current = peer;
 
-              setVisualizerData(points);
-              animationFrameRef.current = requestAnimationFrame(updateVisualizer);
-          };
-          updateVisualizer();
+          peer.on('open', async (id) => {
+              console.log('My peer ID is: ' + id);
+              // 3. Register presence in call
+              await joinCallSession(groupId, currentUser.uid);
+              setIsInCall(true);
+              
+              // 4. Connect to existing participants
+              // Note: We need the list of *other* participants.
+              // We rely on GroupDetails update or we can fetch them.
+              // For robustness, in Mesh, usually new joiner calls everyone.
+              if (groupDetails?.callParticipants) {
+                  groupDetails.callParticipants.forEach(pid => {
+                      if (pid !== currentUser.uid) {
+                          connectToPeer(pid, stream);
+                      }
+                  });
+              }
+          });
+
+          // 5. Handle Incoming Calls
+          peer.on('call', (call) => {
+              console.log('Incoming call from:', call.peer);
+              call.answer(stream); // Answer with our stream
+              handleCallStream(call);
+              callsRef.current.push(call);
+          });
+          
+          // Setup Audio Context for Visualizer (Mixing Local + Remote)
+          setupAudioMixing(stream);
 
       } catch (e) {
           console.error("Failed to join call", e);
-          alert("Could not access microphone. Please check permissions.");
+          alert("Could not access microphone or connect to peer server.");
       }
   };
 
-  const leaveCall = () => {
-      if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach(track => track.stop());
-          mediaStreamRef.current = null;
+  const connectToPeer = (peerId: string, stream: MediaStream) => {
+      if (!peerRef.current) return;
+      console.log('Calling peer:', peerId);
+      const call = peerRef.current.call(peerId, stream);
+      if (call) {
+        handleCallStream(call);
+        callsRef.current.push(call);
       }
+  };
+
+  const handleCallStream = (call: any) => {
+      call.on('stream', (remoteStream: MediaStream) => {
+          console.log('Received remote stream');
+          // Update state to render hidden audio element
+          setRemoteStreams(prev => [...prev, remoteStream]);
+          
+          // Add to Audio Mixer for Visualizer
+          addStreamToMixer(remoteStream);
+      });
+      call.on('close', () => {
+           // Handle peer disconnect if needed
+      });
+  };
+
+  const setupAudioMixing = (localStream: MediaStream) => {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioCtx;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 32;
+      analyserRef.current = analyser;
+
+      // Master Gain for visualizer input
+      const masterGain = audioCtx.createGain();
+      masterGain.connect(analyser);
+
+      // Add Local Stream
+      const localSource = audioCtx.createMediaStreamSource(localStream);
+      localSource.connect(masterGain);
+      sourceNodesRef.current.push(localSource);
+
+      // Start Visualizer Loop
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const updateVisualizer = () => {
+          if (!analyserRef.current) return;
+          analyserRef.current.getByteFrequencyData(dataArray);
+          
+          const points = [dataArray[0], dataArray[2], dataArray[4], dataArray[6], dataArray[8]]
+              .map(val => Math.max(10, val / 2.55)); // Normalize to % (0-100ish)
+
+          setVisualizerData(points);
+          animationFrameRef.current = requestAnimationFrame(updateVisualizer);
+      };
+      updateVisualizer();
+  };
+
+  const addStreamToMixer = (stream: MediaStream) => {
+      if (!audioContextRef.current || !analyserRef.current) return;
+      try {
+        const source = audioContextRef.current.createMediaStreamSource(stream);
+        // Connect to analyser for visualization (do NOT connect to destination to avoid echo/feedback loop, 
+        // as the <audio> element handles playback)
+        source.connect(analyserRef.current); 
+        sourceNodesRef.current.push(source);
+      } catch (e) {
+          console.error("Error adding stream to mixer", e);
+      }
+  };
+
+  const leaveCall = async () => {
+      // 1. Cleanup Media
+      if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach(track => track.stop());
+          localStreamRef.current = null;
+      }
+      
+      // 2. Cleanup Audio Context
       if (audioContextRef.current) {
           audioContextRef.current.close();
           audioContextRef.current = null;
@@ -272,16 +343,37 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           cancelAnimationFrame(animationFrameRef.current);
           animationFrameRef.current = null;
       }
+      sourceNodesRef.current = [];
+
+      // 3. Close Peer Connections
+      callsRef.current.forEach(call => call.close());
+      callsRef.current = [];
+      if (peerRef.current) {
+          peerRef.current.destroy();
+          peerRef.current = null;
+      }
+      
+      setRemoteStreams([]);
       setIsInCall(false);
       setVisualizerData(new Array(5).fill(10));
-      // Note: We do NOT turn off group.isCallActive here, as others might still be in it.
-      // Only the last person or specific logic would turn it off, but for this simplified flow,
-      // it stays active until maybe explicitly ended (omitted for brevity/prompt focus).
+
+      // 4. Update Firestore
+      if (groupId) {
+          await leaveCallSession(groupId, currentUser.uid);
+      }
+  };
+
+  const handleEndForEveryone = async () => {
+      if (confirm("Do you want to end the call for everyone?")) {
+          if (groupId) {
+              await endGroupCall(groupId);
+          }
+      }
   };
 
   const toggleMute = () => {
-      if (mediaStreamRef.current) {
-          mediaStreamRef.current.getAudioTracks().forEach(track => {
+      if (localStreamRef.current) {
+          localStreamRef.current.getAudioTracks().forEach(track => {
               track.enabled = !track.enabled;
           });
           setIsMuted(!isMuted);
@@ -289,7 +381,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
 
-  // Audio Player Logic
+  // Audio Player Logic (TTS)
   const handlePlayAudio = async (msg: Message) => {
       const msgId = msg.id;
 
@@ -897,39 +989,62 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   </div>
               )}
 
-              {/* In Call Visualizer Pill */}
+              {/* In Call Visualizer Pill - Half Height/Width */}
               {isInCall && (
                   <div className="mb-2 w-full flex justify-center">
-                    <div className="bg-[#2A2B2D] border border-[#444746] rounded-full px-4 py-2 flex items-center justify-between gap-6 shadow-lg">
+                    <div className="bg-[#2A2B2D] border border-[#444746] rounded-full px-3 py-1 flex items-center justify-between gap-4 shadow-lg h-8">
                         {/* Audio Visualizer (Left) */}
-                        <div className="flex items-end gap-1 h-4 w-16 justify-center">
+                        <div className="flex items-end gap-0.5 h-3 w-10 justify-center">
                             {visualizerData.map((val, i) => (
                                 <div 
                                     key={i} 
-                                    className="w-1.5 bg-[#4285F4] rounded-full transition-all duration-75"
+                                    className="w-1 bg-[#4285F4] rounded-full transition-all duration-75"
                                     style={{ height: `${Math.min(100, val)}%` }}
                                 ></div>
                             ))}
                         </div>
 
                         {/* Controls (Right) */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
                              <button 
                                 onClick={toggleMute}
-                                className={`p-1.5 rounded-full ${isMuted ? 'bg-red-500/20 text-red-400' : 'bg-[#333537] text-[#C4C7C5] hover:text-white'}`}
+                                className={`p-1 rounded-full ${isMuted ? 'bg-red-500/20 text-red-400' : 'bg-[#333537] text-[#C4C7C5] hover:text-white'}`}
                              >
-                                 <MicIcon className="w-4 h-4" />
+                                 <MicIcon className="w-3 h-3" />
                              </button>
                              <button 
                                 onClick={leaveCall}
-                                className="p-1.5 rounded-full bg-red-600 text-white hover:bg-red-500"
+                                className="p-1 rounded-full bg-red-600 text-white hover:bg-red-500"
+                                title="Leave Call"
                              >
-                                 <XMarkIcon className="w-4 h-4" />
+                                 <XMarkIcon className="w-3 h-3" />
                              </button>
+                             
+                             {/* Admin End Call Button */}
+                             {groupDetails?.callStartedBy === currentUser.uid && (
+                                <button
+                                    onClick={handleEndForEveryone}
+                                    className="p-1 rounded-full bg-[#E3E3E3] text-red-600 hover:bg-white border border-red-500"
+                                    title="End Call for Everyone"
+                                >
+                                    <StopIcon className="w-3 h-3" />
+                                </button>
+                             )}
                         </div>
                     </div>
                   </div>
               )}
+
+              {/* Hidden Audio Elements for Remote Streams */}
+              {remoteStreams.map((stream, idx) => (
+                  <audio 
+                    key={idx} 
+                    autoPlay 
+                    ref={audioEl => {
+                        if (audioEl) audioEl.srcObject = stream;
+                    }} 
+                  />
+              ))}
 
               <div className={`bg-[#2A2B2D] rounded-full flex items-center px-3 gap-2 border border-transparent focus-within:border-[#5E5E5E] smooth-transition ${isCompact ? 'py-1' : 'py-2'}`}>
                   {/* Call Button */}
@@ -1160,11 +1275,3 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 };
 
 export default ChatInterface;
-
-function XMarkIcon({ className }: { className?: string }) {
-    return (
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className={className || "w-6 h-6"}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-    )
-}
