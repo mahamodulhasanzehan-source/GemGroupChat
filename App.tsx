@@ -135,8 +135,8 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   // Lifted State for Audio Settings
-  const [aiVoice, setAiVoice] = useState('Fenrir');
-  const [playbackSpeed, setPlaybackSpeed] = useState(1.2); // Default to 1.2x
+  const [aiVoice, setAiVoice] = useState('Charon'); // Default voice
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.5); // Default speed
 
   useEffect(() => {
     // Use the unified subscription that handles both Real and Mock auth

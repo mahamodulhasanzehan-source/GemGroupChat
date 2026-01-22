@@ -29,7 +29,7 @@ const AI_VOICES = ['Fenrir', 'Puck', 'Charon', 'Kore', 'Aoede'];
 
 const Sidebar: React.FC<SidebarProps> = ({ 
     isCollapsed, setIsCollapsed, onCreateGroup, onJoinGroup, currentUser,
-    aiVoice = 'Fenrir', setAiVoice, playbackSpeed = 1.2, setPlaybackSpeed
+    aiVoice = 'Charon', setAiVoice, playbackSpeed = 1.5, setPlaybackSpeed
 }) => {
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(currentUser?.displayName || '');

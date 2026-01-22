@@ -296,7 +296,7 @@ export const streamGeminiResponse = async (
 
 // --- Speech Generation ---
 
-export const generateSpeech = async (text: string, voiceName: string = 'Fenrir'): Promise<string | null> => {
+export const generateSpeech = async (text: string, voiceName: string = 'Charon'): Promise<string | null> => {
     // 1. Filter out code blocks to prevent reading code
     const cleanText = text
         .replace(/```[\s\S]*?```/g, '') // Remove multi-line code blocks

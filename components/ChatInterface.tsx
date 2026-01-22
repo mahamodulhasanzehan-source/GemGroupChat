@@ -36,7 +36,7 @@ const formatTokenCount = (num: number) => {
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
     currentUser, groupId, 
-    aiVoice = 'Fenrir', playbackSpeed = 1.2 // Defaults if not provided
+    aiVoice = 'Charon', playbackSpeed = 1.5 // Defaults if not provided
 }) => {
   const [input, setInput] = useState('');
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
