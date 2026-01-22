@@ -146,6 +146,7 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
                     title="preview"
                     className="w-full h-full border-none"
                     sandbox="allow-scripts allow-modals"
+                    style={{ backgroundColor: '#131314' }}
                 />
             ) : (
                 <div className="absolute inset-0 flex items-center justify-center text-gray-400">

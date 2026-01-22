@@ -387,7 +387,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isSending || !groupId) return;
+    // Allows sending even if system is busy (queuing), only block if empty input or no group
+    if (!input.trim() || !groupId) return;
     
     if (groupDetails?.lockedBy && groupDetails.lockedBy !== currentUser.uid) {
         if (Date.now() - (groupDetails.lockedAt || 0) < 120000) {
@@ -763,7 +764,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5]"
                 />
                 
-                {isSystemBusy ? (
+                {isSystemBusy && !input.trim() ? (
                     <button 
                         onClick={handleStop} 
                         className="p-1.5 bg-[#E3E3E3] text-black rounded-full hover:bg-white hover:scale-105 transition-transform"

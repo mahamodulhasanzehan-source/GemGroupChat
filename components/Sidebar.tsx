@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PlusIcon, UserGroupIcon, MenuIcon, TrashIcon, XMarkIcon, PencilIcon } from './Icons';
-import { updateUserProfile, subscribeToUserGroups, deleteGroupFull } from '../services/firebase';
+import { updateUserProfile, subscribeToUserGroups, deleteGroupFull, signOut } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
 
 interface SidebarProps {
@@ -35,6 +35,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [tempName, setTempName] = useState(currentUser?.displayName || '');
   const [myGroups, setMyGroups] = useState<any[]>([]);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   const navigate = useNavigate();
 
@@ -53,6 +54,11 @@ const Sidebar: React.FC<SidebarProps> = ({
       };
       if (isProfileModalOpen) window.addEventListener('keydown', handleEsc);
       return () => window.removeEventListener('keydown', handleEsc);
+  }, [isProfileModalOpen]);
+
+  // Reset logout state on open
+  useEffect(() => {
+    if (isProfileModalOpen) setShowLogoutConfirm(false);
   }, [isProfileModalOpen]);
 
   const handleNameSave = () => {
@@ -308,6 +314,42 @@ const Sidebar: React.FC<SidebarProps> = ({
                           </div>
                       </div>
                   </div>
+
+                  {/* Sign Out Section */}
+                  {!currentUser?.isAnonymous && (
+                      <div className="mt-4 pt-4 border-t border-[#444746]">
+                          {!showLogoutConfirm ? (
+                              <button 
+                                  onClick={() => setShowLogoutConfirm(true)}
+                                  className="w-full py-2 rounded-lg bg-[#2A2B2D] text-[#E3E3E3] border border-[#444746] hover:bg-[#333537] text-sm font-medium transition-colors"
+                              >
+                                  Log Out
+                              </button>
+                          ) : (
+                              <div className="bg-[#2A0000] border border-red-900/50 rounded-lg p-3 text-center animate-[fadeIn_0.2s_ease-out]">
+                                  <p className="text-xs text-red-200 mb-3">Are you sure you want to log out?</p>
+                                  <div className="flex gap-2">
+                                      <button 
+                                          onClick={() => setShowLogoutConfirm(false)}
+                                          className="flex-1 py-1.5 rounded bg-[#333537] text-[#C4C7C5] text-xs hover:bg-[#444746]"
+                                      >
+                                          No
+                                      </button>
+                                      <button 
+                                          onClick={() => {
+                                              signOut();
+                                              setIsProfileModalOpen(false);
+                                              navigate('/login');
+                                          }}
+                                          className="flex-1 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-500"
+                                      >
+                                          Yes
+                                      </button>
+                                  </div>
+                              </div>
+                          )}
+                      </div>
+                  )}
 
               </div>
           </div>
