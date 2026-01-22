@@ -317,7 +317,8 @@ export const generateSpeech = async (text: string): Promise<string | null> => {
                 responseModalities: [Modality.AUDIO],
                 speechConfig: {
                     voiceConfig: {
-                        prebuiltVoiceConfig: { voiceName: 'Charon' }
+                        // Changed to Fenrir for deeper voice
+                        prebuiltVoiceConfig: { voiceName: 'Fenrir' }
                     }
                 }
             }

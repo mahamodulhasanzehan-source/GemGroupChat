@@ -162,6 +162,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       // 5. Play if we have a URL
       if (url) {
           const audio = new Audio(url);
+          audio.playbackRate = 1.5; // Set speed to 1.5x
           audioRef.current = audio;
           audio.onended = () => setPlayingMessageId(null);
           audio.play().catch(e => console.error("Playback failed", e));
