@@ -56,6 +56,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   // Cache stores Blob URLs locally.
   const [audioCache, setAudioCache] = useState<Record<string, string>>({}); 
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [generatingAudioIds, setGeneratingAudioIds] = useState<Set<string>>(new Set());
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Key Management State
@@ -121,26 +122,49 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   }, [groupId, currentUser]);
 
   // Audio Player Logic
-  const handlePlayAudio = (msgId: string) => {
-      const url = audioCache[msgId];
-      if (!url) return;
-
+  const handlePlayAudio = async (msgId: string, text: string) => {
+      // 1. If playing this message, stop it.
       if (playingMessageId === msgId) {
-          // Stop
           if (audioRef.current) {
               audioRef.current.pause();
               audioRef.current.currentTime = 0;
           }
           setPlayingMessageId(null);
-      } else {
-          // Play new
-          if (audioRef.current) {
-              audioRef.current.pause();
+          return;
+      }
+
+      // 2. Stop any other playing audio
+      if (audioRef.current) {
+          audioRef.current.pause();
+          setPlayingMessageId(null);
+      }
+
+      // 3. Check Cache
+      let url = audioCache[msgId];
+
+      // 4. If not in cache, generate it now (On-Demand)
+      if (!url) {
+          setGeneratingAudioIds(prev => new Set(prev).add(msgId));
+          try {
+              url = await generateSpeech(text) || '';
+              if (url) {
+                  setAudioCache(prev => ({ ...prev, [msgId]: url }));
+              }
+          } finally {
+              setGeneratingAudioIds(prev => {
+                  const next = new Set(prev);
+                  next.delete(msgId);
+                  return next;
+              });
           }
+      }
+
+      // 5. Play if we have a URL
+      if (url) {
           const audio = new Audio(url);
           audioRef.current = audio;
           audio.onended = () => setPlayingMessageId(null);
-          audio.play();
+          audio.play().catch(e => console.error("Playback failed", e));
           setPlayingMessageId(msgId);
       }
   };
@@ -307,9 +331,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           // This runs after text generation is complete to avoid context switching too much
           // Uses Key 5 exclusively.
           console.log("Generating Audio in background...");
-          const audioUrl = await generateSpeech(accumulatedText);
-          if (audioUrl) {
-              setAudioCache(prev => ({ ...prev, [modelMsgId]: audioUrl }));
+          // Pre-set generating status so UI shows spinner immediately
+          setGeneratingAudioIds(prev => new Set(prev).add(modelMsgId));
+          try {
+            const audioUrl = await generateSpeech(accumulatedText);
+            if (audioUrl) {
+                setAudioCache(prev => ({ ...prev, [modelMsgId]: audioUrl }));
+            }
+          } finally {
+            setGeneratingAudioIds(prev => {
+                const next = new Set(prev);
+                next.delete(modelMsgId);
+                return next;
+            });
           }
 
       } catch (e: any) {
@@ -555,9 +589,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
 
                 const isQueued = msg.status === 'queued';
                 
-                // Check if audio exists for this message
-                const hasAudio = !!audioCache[msg.id];
+                // Audio Logic
                 const isPlaying = playingMessageId === msg.id;
+                const isGeneratingAudio = generatingAudioIds.has(msg.id);
+                // We show the button if it's a finished AI message
+                const showAudioButton = isGemini && !msg.isLoading;
 
                 return (
                     <div 
@@ -609,16 +645,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                 </ReactMarkdown>
                             </div>
                             
-                            {/* Audio Player Button (Below bubble, visible if audio exists) */}
-                            {isGemini && hasAudio && !msg.isLoading && (
+                            {/* Audio Player Button (Visible for all completed AI messages) */}
+                            {showAudioButton && (
                                 <button
-                                    onClick={() => handlePlayAudio(msg.id)}
+                                    onClick={() => handlePlayAudio(msg.id, msg.text)}
+                                    disabled={isGeneratingAudio}
                                     className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border transition-colors
-                                        ${isPlaying ? 'bg-[#4285F4] text-white border-[#4285F4]' : 'bg-[#1E1F20] text-[#C4C7C5] border-[#444746] hover:text-white'}
+                                        ${isPlaying 
+                                            ? 'bg-[#4285F4] text-white border-[#4285F4]' 
+                                            : 'bg-[#1E1F20] text-[#C4C7C5] border-[#444746] hover:text-white'}
+                                        ${isGeneratingAudio ? 'opacity-70 cursor-wait' : ''}
                                     `}
                                 >
-                                    {isPlaying ? <StopCircleIcon /> : <SpeakerIcon />}
-                                    <span>{isPlaying ? 'Stop' : 'Play'}</span>
+                                    {isGeneratingAudio ? (
+                                        <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                                    ) : isPlaying ? (
+                                        <StopCircleIcon />
+                                    ) : (
+                                        <SpeakerIcon />
+                                    )}
+                                    <span>{isGeneratingAudio ? 'Generating...' : (isPlaying ? 'Stop' : 'Play')}</span>
                                 </button>
                             )}
 
