@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon } from './Icons';
-import { Message, CanvasState, Presence, Group } from '../types';
+import { Message, CanvasState, Presence, Group, UserChatMessage } from '../types';
 import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS, base64ToWav } from '../services/geminiService';
 import { 
     subscribeToMessages, sendMessage, updateMessage, deleteMessage,
     subscribeToGroupDetails, subscribeToTokenUsage, updateGroup,
     subscribeToCanvas, updateCanvas, 
-    subscribeToPresence, updatePresence, setGroupLock
+    subscribeToPresence, updatePresence, setGroupLock,
+    subscribeToUserChat, sendUserChatMessage
 } from '../services/firebase';
 import ReactMarkdown from 'react-markdown';
 import Canvas from './Canvas';
@@ -42,20 +43,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     aiVoice = 'Charon', playbackSpeed = 1.5,
     isCanvasCollapsed = true, setIsCanvasCollapsed
 }) => {
+  // Input states
   const [input, setInput] = useState('');
+  const [userChatInput, setUserChatInput] = useState('');
+
+  // Messages State
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
+  const [userChatMessages, setUserChatMessages] = useState<UserChatMessage[]>([]);
+  
   const [groupDetails, setGroupDetails] = useState<Group | null>(null);
   const [isSending, setIsSending] = useState(false);
+  
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const userChatEndRef = useRef<HTMLDivElement>(null);
 
   // UI State
-  // isCanvasCollapsed is now a prop
   const [mobileView, setMobileView] = useState<'chat' | 'canvas'>('chat');
-
   const [showOnlineUsers, setShowOnlineUsers] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Presence[]>([]);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   
+  // Chat Mode: 'ai' | 'user' | 'both'
+  const [chatMode, setChatMode] = useState<'ai' | 'user' | 'both'>('ai');
+
   const [hiddenMessageIds, setHiddenMessageIds] = useState<Set<string>>(new Set());
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
 
@@ -63,7 +74,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [tokenUsage, setTokenUsage] = useState<any>({});
   
   // Audio State
-  // Cache stores Blob URLs locally.
   const [audioCache, setAudioCache] = useState<Record<string, string>>({}); 
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [generatingAudioIds, setGeneratingAudioIds] = useState<Set<string>>(new Set());
@@ -76,20 +86,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const processingRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const scrollToBottom = () => {
-    if (!editingMessageId) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (ref: React.RefObject<HTMLDivElement>) => {
+    ref.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [localMessages]);
+    if (!editingMessageId) scrollToBottom(messagesEndRef);
+  }, [localMessages, chatMode]);
 
   useEffect(() => {
-      // Subscribe to Token Usage from Firebase
+    scrollToBottom(userChatEndRef);
+  }, [userChatMessages, chatMode]);
+
+  useEffect(() => {
       const unsubscribeUsage = subscribeToTokenUsage((data) => setTokenUsage(data));
-      // Subscribe to Key Status from GeminiService
       const unsubscribeKeys = subscribeToKeyStatus((status) => setKeyStatus(status));
-      
       return () => {
           unsubscribeUsage();
           unsubscribeKeys();
@@ -109,8 +120,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                processingRef.current = null;
           }
       });
+      
       const unsubscribeMsgs = subscribeToMessages(groupId, (msgs) => setLocalMessages(msgs));
       
+      // Subscribe to User Chat
+      const unsubscribeUserChat = subscribeToUserChat(groupId, (msgs) => setUserChatMessages(msgs));
+
       const unsubscribeCanvas = subscribeToCanvas(groupId, (data) => {
           if (data) setCanvasState(data);
       });
@@ -125,6 +140,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return () => {
           unsubscribeGroup();
           unsubscribeMsgs();
+          unsubscribeUserChat();
           unsubscribeCanvas();
           unsubscribePresence();
           clearInterval(heartbeat);
@@ -135,7 +151,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const handlePlayAudio = async (msg: Message) => {
       const msgId = msg.id;
 
-      // 1. If playing this message, stop it.
       if (playingMessageId === msgId) {
           if (audioRef.current) {
               audioRef.current.pause();
@@ -145,17 +160,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           return;
       }
 
-      // 2. Stop any other playing audio
       if (audioRef.current) {
           audioRef.current.pause();
           setPlayingMessageId(null);
       }
 
-      // 3. Check Cache or Stored Data
       const cacheKey = `${msgId}_${aiVoice}`;
       let url = audioCache[cacheKey];
 
-      // If we don't have a local cache but we have stored audio data from Firebase, use that
       if (!url && msg.audioData) {
           try {
              url = base64ToWav(msg.audioData);
@@ -165,13 +177,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           }
       }
 
-      // 4. If still not found, generate it now (On-Demand)
       if (!url) {
           setGeneratingAudioIds(prev => new Set(prev).add(msgId));
           try {
               const base64 = await generateSpeech(msg.text, aiVoice) || '';
               if (base64) {
-                  // Persist to Firebase so others can hear it too
                   if (groupId) {
                       await updateMessage(groupId, msgId, { audioData: base64 });
                   }
@@ -187,10 +197,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           }
       }
 
-      // 5. Play if we have a URL
       if (url) {
           const audio = new Audio(url);
-          audio.playbackRate = playbackSpeed; // Use prop
+          audio.playbackRate = playbackSpeed; 
           audioRef.current = audio;
           audio.onended = () => setPlayingMessageId(null);
           audio.play().catch(e => console.error("Playback failed", e));
@@ -199,7 +208,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const extractCode = (text: string) => {
-      // Try to match HTML code blocks, capturing even partial content
       const htmlMatch = text.match(/```html\s*([\s\S]*?)(```|$)/i);
       const genericMatch = text.match(/```\s*([\s\S]*?)(```|$)/i);
       let code = null;
@@ -300,12 +308,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           validHistory.push({ role: 'user', text: `[${userMsg.senderName}]: ${userMsg.text}` });
 
           let accumulatedText = '';
-          
-          // Separate throttle timers for smoother updates
           let lastMessageUpdateTime = 0;
           let lastCanvasUpdateTime = 0;
-          const MESSAGE_THROTTLE = 150; // Fast chat updates
-          // Increased throttle to reduce flicker when code is rapidly changing
+          const MESSAGE_THROTTLE = 150; 
           const CANVAS_THROTTLE = 800;  
 
           await streamGeminiResponse(
@@ -314,18 +319,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               canvasState,
               async (chunk) => {
                   accumulatedText += chunk;
-                  
                   const codeUpdates = extractCode(accumulatedText);
                   
-                  // Canvas Updates
                   if (codeUpdates.html) {
-                       // 1. Optimistic Local Update (Instant)
                        setCanvasState(prev => ({ ...prev, html: codeUpdates.html!, lastUpdated: Date.now() }));
-                       
-                       // 2. Auto-open canvas if closed and content is generating
                        if (isCanvasCollapsed && setIsCanvasCollapsed) setIsCanvasCollapsed(false);
 
-                       // 3. Throttled Firestore Update (Shared State)
                        const now = Date.now();
                        if (now - lastCanvasUpdateTime > CANVAS_THROTTLE) {
                            lastCanvasUpdateTime = now;
@@ -333,7 +332,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                        }
                   }
 
-                  // Message Updates
                   const now = Date.now();
                   if (now - lastMessageUpdateTime > MESSAGE_THROTTLE) {
                       lastMessageUpdateTime = now;
@@ -346,7 +344,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               abortController.signal
           );
 
-          // Final update to ensure consistency
           const finalCode = extractCode(accumulatedText);
           if (finalCode.html) {
               await updateCanvas(groupId, { html: finalCode.html });
@@ -354,22 +351,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
           await updateMessage(groupId, modelMsgId, { text: accumulatedText, isLoading: false, status: 'done' });
           await updateMessage(groupId, userMsg.id, { status: 'done' });
-          
           await updateGroup(groupId, { processingMessageId: null });
 
-          // --- TRIGGER BACKGROUND SPEECH GENERATION ---
           console.log("Generating Audio in background...");
-          // Pre-set generating status so UI shows spinner immediately
           setGeneratingAudioIds(prev => new Set(prev).add(modelMsgId));
           try {
-            // Pass the current selected voice
             const base64 = await generateSpeech(accumulatedText, aiVoice);
             if (base64) {
-                // SAVE Base64 to Firestore so all users have it
                 await updateMessage(groupId, modelMsgId, { audioData: base64 });
-                
                 const url = base64ToWav(base64);
-                // Cache locally
                 const cacheKey = `${modelMsgId}_${aiVoice}`;
                 setAudioCache(prev => ({ ...prev, [cacheKey]: url }));
             }
@@ -407,7 +397,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleSend = async () => {
-    // Allows sending even if system is busy (queuing), only block if empty input or no group
     if (!input.trim() || !groupId) return;
     
     if (groupDetails?.lockedBy && groupDetails.lockedBy !== currentUser.uid) {
@@ -418,7 +407,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     setMobileView('chat'); 
-
     const senderDisplayName = currentUser.displayName || 'Guest';
 
     try {
@@ -442,10 +430,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleUserChatSend = async () => {
+      if (!userChatInput.trim() || !groupId) return;
+      try {
+          await sendUserChatMessage(groupId, {
+              text: userChatInput,
+              senderId: currentUser.uid,
+              senderName: currentUser.displayName || 'Guest',
+              photoURL: currentUser.photoURL
+          });
+          setUserChatInput('');
+      } catch (e) {
+          console.error("Error sending user chat", e);
+      }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, type: 'ai' | 'user' = 'ai') => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (type === 'ai') handleSend();
+      else handleUserChatSend();
     }
   };
 
@@ -453,6 +457,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       await setGroupLock(groupId!, currentUser.uid);
       setEditingMessageId(msg.id);
       setInput(msg.text);
+      if (chatMode !== 'both') setChatMode('ai');
   };
 
   const handleDelete = async (msg: Message) => {
@@ -465,170 +470,39 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
   };
   
-  // Show ALL messages, including queued ones, so everyone sees them immediately
   const visibleMessages = localMessages.filter(m => !hiddenMessageIds.has(m.id));
-  
-  // For the status bar logic
   const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
-  
-  // Identify who is currently being processed
   const currentProcessingMsg = localMessages.find(m => m.id === groupDetails?.processingMessageId);
   const isSystemBusy = !!groupDetails?.processingMessageId;
 
-  // Key Selection Logic
   const handleKeySelect = (index: number) => {
       setManualKey(index);
       setShowKeyDropdown(false);
   };
 
-  // Generate Key List for UI
   const keyList = Array.from({ length: TOTAL_KEYS }, (_, i) => {
       const usage = tokenUsage[`key_${i}`] || 0;
       const isRateLimited = keyStatus.rateLimited.includes(i);
       const isActive = keyStatus.currentIndex === i;
-      const isTTS = i === 4; // Key 5 is index 4
+      const isTTS = i === 4; 
       return { index: i, usage, isRateLimited, isActive, isTTS };
   });
 
-  return (
-    <div className="flex h-full bg-[#131314] overflow-hidden smooth-transition">
-        
-      {/* Left Panel */}
-      <div className={`flex flex-col border-r border-[#444746] smooth-transition
-            ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'} 
-            ${isCanvasCollapsed ? 'md:w-full max-w-4xl mx-auto md:border-r-0' : 'md:w-[35%] md:min-w-[350px]'}
-      `}>
-        
-        {/* Top Bar */}
-        <div className="h-14 shrink-0 flex items-center justify-between px-4 border-b border-[#444746] bg-[#131314]">
-            <div className="flex items-center gap-2 relative">
-                <span className="text-[#E3E3E3] font-medium tracking-tight truncate max-w-[150px]">
-                    {groupDetails?.name || 'Chat'}
-                </span>
-                
-                <div className="relative">
-                    <button 
-                        onClick={() => setShowOnlineUsers(!showOnlineUsers)}
-                        className="flex items-center gap-1 text-xs text-[#C4C7C5] hover:text-white bg-[#1E1F20] px-2 py-1 rounded-full border border-[#444746] smooth-transition"
-                    >
-                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                        {onlineUsers.length} Online
-                        <ChevronDownIcon />
-                    </button>
-                    {showOnlineUsers && (
-                        <div className="absolute top-full left-0 mt-2 w-48 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
-                            <div className="max-h-40 overflow-y-auto">
-                                {onlineUsers.map(u => (
-                                    <div key={u.uid} className="px-3 py-2 text-xs text-[#C4C7C5] flex items-center gap-2 hover:bg-[#333537] smooth-transition">
-                                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-                                        {u.displayName}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-                 {/* Key Selector Dropdown */}
-                 <div className="relative hidden md:block">
-                     <button 
-                        onClick={() => setShowKeyDropdown(!showKeyDropdown)}
-                        className={`flex items-center gap-2 text-xs font-mono border border-[#444746] rounded overflow-hidden shadow-sm hover:border-[#5E5E5E] smooth-transition
-                            ${keyStatus.rateLimited.includes(keyStatus.currentIndex) ? 'bg-yellow-900/20 border-yellow-700/50' : 'bg-[#1E1F20]'}
-                        `}
-                     >
-                        <div className={`px-2 py-1 border-r border-[#444746] ${keyStatus.rateLimited.includes(keyStatus.currentIndex) ? 'text-yellow-500' : 'bg-[#333537] text-[#A8C7FA]'}`}>
-                            Key {keyStatus.currentIndex + 1}
-                        </div>
-                        <div className="text-[#C4C7C5] px-2 py-1 flex items-center gap-1">
-                            {formatTokenCount(tokenUsage[`key_${keyStatus.currentIndex}`] || 0)}
-                            <ChevronDownIcon className="w-3 h-3" />
-                        </div>
-                    </button>
+  // --- Render Helpers ---
 
-                    {showKeyDropdown && (
-                        <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
-                            <div className="py-1">
-                                <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C]">Text Generation</div>
-                                {keyList.filter(k => !k.isTTS).map((k) => (
-                                    <button
-                                        key={k.index}
-                                        onClick={() => handleKeySelect(k.index)}
-                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] smooth-transition
-                                            ${k.isActive ? 'bg-[#333537/50]' : ''}
-                                            ${k.isRateLimited ? 'text-yellow-500' : 'text-[#C4C7C5]'}
-                                        `}
-                                    >
-                                        <div className="flex items-center gap-2">
-                                            <span className={`w-1.5 h-1.5 rounded-full ${k.isActive ? 'bg-[#4285F4]' : 'bg-transparent'}`}></span>
-                                            <span className="font-mono">Key {k.index + 1}</span>
-                                            {k.isRateLimited && <span className="text-[10px] bg-yellow-900/30 px-1 rounded border border-yellow-700/50">429</span>}
-                                        </div>
-                                        <span className="font-mono text-[10px] opacity-70">{formatTokenCount(k.usage)}</span>
-                                    </button>
-                                ))}
-                                
-                                <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C] border-t border-[#444746]">Speech (TTS)</div>
-                                {keyList.filter(k => k.isTTS).map((k) => (
-                                    <div
-                                        key={k.index}
-                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] smooth-transition cursor-default text-[#A8C7FA]`}
-                                    >
-                                        <div className="flex items-center gap-2">
-                                            <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
-                                            <span className="font-mono">Key {k.index + 1}</span>
-                                            {k.isRateLimited && <span className="text-[10px] bg-yellow-900/30 px-1 rounded border border-yellow-700/50">429</span>}
-                                        </div>
-                                        <span className="font-mono text-[10px] opacity-70">{formatTokenCount(k.usage)}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                 </div>
-
-                {/* Mobile: Toggle to Canvas */}
-                <button 
-                    onClick={() => setMobileView('canvas')}
-                    className="md:hidden p-1.5 bg-[#4285F4] text-white rounded-md text-xs font-medium"
-                >
-                    Canvas &gt;
-                </button>
-
-                {/* Desktop: Expand Canvas */}
-                {isCanvasCollapsed && setIsCanvasCollapsed && (
-                    <button 
-                        onClick={() => setIsCanvasCollapsed(false)}
-                        className="hidden md:flex p-1.5 hover:bg-[#333537] text-[#E3E3E3] rounded-md border border-[#444746] smooth-transition"
-                        title="Open Canvas"
-                    >
-                        <ChevronDownIcon /> 
-                        <span className="text-xs ml-1">Canvas</span>
-                    </button>
-                )}
-            </div>
-        </div>
-
-        {/* Messages List & Input Area */}
+  const renderAIChat = (isCompact: boolean) => (
+      <div className="flex flex-col h-full relative">
         <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center scroll-smooth relative">
             <div className="w-full space-y-6 pb-4">
                 {visibleMessages.map((msg, index) => {
                 const isMe = msg.senderId === currentUser.uid;
                 const isGemini = msg.role === 'model';
-                // ALL user roles go on the right, AI goes on the left
                 const isUserRole = msg.role === 'user';
-                
                 const myMessages = visibleMessages.filter(m => m.senderId === currentUser.uid);
                 const isMyLatest = myMessages.length > 0 && myMessages[myMessages.length - 1].id === msg.id;
-
                 const isQueued = msg.status === 'queued';
-                
-                // Audio Logic
                 const isPlaying = playingMessageId === msg.id;
                 const isGeneratingAudio = generatingAudioIds.has(msg.id);
-                // We show the button if it's a finished AI message
                 const showAudioButton = isGemini && !msg.isLoading;
 
                 return (
@@ -647,7 +521,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         </div>
                     
                         <div className={`flex flex-col max-w-[90%] ${isUserRole ? 'items-end' : 'items-start'}`}>
-                            {/* Message Bubble */}
                             <div className={`
                                 prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm smooth-transition
                                 ${isUserRole ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}
@@ -664,7 +537,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     code(props) {
                                         const {children, className, node, ...rest} = props
                                         const match = /language-(\w+)/.exec(className || '')
-                                        // "Directly codes in canvas" - Hide large code blocks from chat bubble
                                         if (match) {
                                             return (
                                                 <div className="my-1 flex items-center gap-2 p-2 bg-[#1A1A1C] border border-[#444746] rounded text-xs text-[#A8C7FA]">
@@ -681,7 +553,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 </ReactMarkdown>
                             </div>
                             
-                            {/* Audio Player Button (Visible for all completed AI messages) */}
                             {showAudioButton && (
                                 <button
                                     onClick={() => handlePlayAudio(msg)}
@@ -703,7 +574,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     <span>{isGeneratingAudio ? 'Generating...' : (isPlaying ? 'Stop' : 'Play')}</span>
                                 </button>
                             )}
-
                         </div>
 
                         {!isGemini && hoveredMessageId === msg.id && (
@@ -738,7 +608,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
         </div>
 
-        {/* Status Bar - Shows when ANYONE is queued or processing */}
         {(queuedMessages.length > 0 || isSystemBusy) && (
              <div className="bg-[#1A1A1C] border-t border-[#444746] px-4 py-2 flex items-center justify-between z-30 smooth-transition">
                  <div className="flex items-center gap-2 text-xs">
@@ -766,21 +635,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
              </div>
         )}
 
-        {/* Input */}
-        <div className="p-3 bg-[#131314] border-t border-[#444746] z-30">
+        <div className={`bg-[#131314] border-t border-[#444746] z-30 ${isCompact ? 'p-1' : 'p-3'}`}>
             {editingMessageId && (
-                <div className="text-xs text-[#A8C7FA] mb-2 flex justify-between">
-                    <span>Editing message... (Group Locked)</span>
+                <div className="text-xs text-[#A8C7FA] mb-1 flex justify-between">
+                    <span>Editing...</span>
                     <button onClick={() => { setEditingMessageId(null); setInput(''); setGroupLock(groupId!, null); }} className="hover:underline">Cancel</button>
                 </div>
             )}
-            <div className={`bg-[#1E1F20] rounded-full flex items-center px-3 py-2 gap-2 border smooth-transition ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}`}>
+            <div className={`bg-[#1E1F20] rounded-full flex items-center px-3 gap-2 border smooth-transition ${isCompact ? 'py-1' : 'py-2'} ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}`}>
                 <input 
                     type="text" 
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={editingMessageId ? "Edit your prompt..." : "Type instructions..."}
+                    onKeyDown={(e) => handleKeyDown(e, 'ai')}
+                    placeholder={editingMessageId ? "Edit prompt..." : "Ask Gemini..."}
                     className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5]"
                 />
                 
@@ -788,7 +656,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <button 
                         onClick={handleStop} 
                         className="p-1.5 bg-[#E3E3E3] text-black rounded-full hover:bg-white hover:scale-105 smooth-transition transform"
-                        title="Stop Generating (Accessible by everyone)"
+                        title="Stop Generating"
                     >
                         <StopIcon />
                     </button>
@@ -801,6 +669,218 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 )}
             </div>
         </div>
+      </div>
+  );
+
+  const renderUserChat = (isCompact: boolean) => (
+      <div className="flex flex-col h-full relative bg-[#18181a]">
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col scroll-smooth relative">
+              {userChatMessages.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-[#5E5E5E] text-sm italic opacity-50">
+                      <p>Start chatting with the group!</p>
+                  </div>
+              ) : (
+                  <div className="w-full space-y-3 pb-4">
+                      {userChatMessages.map((msg) => {
+                          const isMe = msg.senderId === currentUser.uid;
+                          return (
+                              <div key={msg.id} className={`flex gap-3 animate-[fadeIn_0.3s_ease-out] ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shrink-0 overflow-hidden border border-[#444746]">
+                                      {msg.photoURL ? (
+                                          <img src={msg.photoURL} alt={msg.senderName} className="w-full h-full object-cover" />
+                                      ) : (
+                                          <span className="text-xs font-bold text-white">{msg.senderName[0]}</span>
+                                      )}
+                                  </div>
+                                  <div className={`flex flex-col max-w-[80%] ${isMe ? 'items-end' : 'items-start'}`}>
+                                      <div className={`text-[10px] mb-1 ${isMe ? 'text-[#A8C7FA]' : 'text-[#C4C7C5]'}`}>
+                                          {msg.senderName}
+                                      </div>
+                                      <div className={`px-3 py-2 rounded-xl text-sm leading-relaxed break-words shadow-sm ${
+                                          isMe ? 'bg-[#4285F4] text-white rounded-tr-none' : 'bg-[#2A2B2D] text-[#E3E3E3] rounded-tl-none border border-[#444746]'
+                                      }`}>
+                                          {msg.text}
+                                      </div>
+                                  </div>
+                              </div>
+                          );
+                      })}
+                      <div ref={userChatEndRef} />
+                  </div>
+              )}
+          </div>
+
+          <div className={`bg-[#18181a] border-t border-[#444746] z-30 ${isCompact ? 'p-1' : 'p-3'}`}>
+              <div className={`bg-[#2A2B2D] rounded-full flex items-center px-3 gap-2 border border-transparent focus-within:border-[#5E5E5E] smooth-transition ${isCompact ? 'py-1' : 'py-2'}`}>
+                  <input 
+                      type="text" 
+                      value={userChatInput}
+                      onChange={(e) => setUserChatInput(e.target.value)}
+                      onKeyDown={(e) => handleKeyDown(e, 'user')}
+                      placeholder="Message the group..."
+                      className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#5E5E5E]"
+                  />
+                  {userChatInput.trim() && (
+                      <button onClick={handleUserChatSend} className="p-1.5 bg-[#4285F4] text-white rounded-full hover:scale-105 smooth-transition transform">
+                          <SendIcon />
+                      </button>
+                  )}
+              </div>
+          </div>
+      </div>
+  );
+
+  return (
+    <div className="flex h-full bg-[#131314] overflow-hidden smooth-transition">
+        
+      {/* Left Panel */}
+      <div className={`flex flex-col border-r border-[#444746] smooth-transition
+            ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'} 
+            ${isCanvasCollapsed ? 'md:w-full max-w-4xl mx-auto md:border-r-0' : 'md:w-[35%] md:min-w-[350px]'}
+      `}>
+        
+        {/* Top Bar */}
+        <div className="h-14 shrink-0 flex items-center justify-between px-4 border-b border-[#444746] bg-[#131314]">
+            <div className="flex items-center gap-3 relative min-w-0 flex-1">
+                <span className="text-[#E3E3E3] font-medium tracking-tight truncate max-w-[100px] shrink-0">
+                    {groupDetails?.name || 'Chat'}
+                </span>
+
+                {/* Mode Toggle Slider */}
+                <div className="relative bg-[#1E1F20] rounded-full p-0.5 flex border border-[#444746] shrink-0">
+                    <div 
+                        className="absolute top-0.5 bottom-0.5 bg-[#444746] rounded-full transition-all duration-300 ease-in-out"
+                        style={{
+                            left: chatMode === 'ai' ? '2px' : chatMode === 'user' ? '33.3%' : '66.6%',
+                            width: '32%',
+                            marginLeft: chatMode === 'ai' ? 0 : chatMode === 'user' ? 0 : '1px'
+                        }}
+                    ></div>
+                    <button 
+                        onClick={() => setChatMode('ai')}
+                        className={`relative px-3 py-1 text-[10px] font-medium rounded-full transition-colors z-10 ${chatMode === 'ai' ? 'text-white' : 'text-[#C4C7C5] hover:text-[#E3E3E3]'}`}
+                    >
+                        AI
+                    </button>
+                    <button 
+                        onClick={() => setChatMode('user')}
+                        className={`relative px-3 py-1 text-[10px] font-medium rounded-full transition-colors z-10 ${chatMode === 'user' ? 'text-white' : 'text-[#C4C7C5] hover:text-[#E3E3E3]'}`}
+                    >
+                        Users
+                    </button>
+                    <button 
+                        onClick={() => setChatMode('both')}
+                        className={`relative px-3 py-1 text-[10px] font-medium rounded-full transition-colors z-10 ${chatMode === 'both' ? 'text-white' : 'text-[#C4C7C5] hover:text-[#E3E3E3]'}`}
+                    >
+                        Both
+                    </button>
+                </div>
+                
+                <div className="relative ml-auto">
+                    <button 
+                        onClick={() => setShowOnlineUsers(!showOnlineUsers)}
+                        className="flex items-center gap-1 text-xs text-[#C4C7C5] hover:text-white bg-[#1E1F20] px-2 py-1 rounded-full border border-[#444746] smooth-transition"
+                    >
+                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                        {onlineUsers.length}
+                    </button>
+                    {showOnlineUsers && (
+                        <div className="absolute top-full right-0 mt-2 w-48 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
+                            <div className="max-h-40 overflow-y-auto">
+                                {onlineUsers.map(u => (
+                                    <div key={u.uid} className="px-3 py-2 text-xs text-[#C4C7C5] flex items-center gap-2 hover:bg-[#333537] smooth-transition">
+                                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                                        {u.displayName}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+            
+            <div className="flex items-center gap-2 ml-2">
+                 {/* Key Selector Dropdown */}
+                 <div className="relative hidden md:block">
+                     <button 
+                        onClick={() => setShowKeyDropdown(!showKeyDropdown)}
+                        className={`flex items-center gap-2 text-xs font-mono border border-[#444746] rounded overflow-hidden shadow-sm hover:border-[#5E5E5E] smooth-transition
+                            ${keyStatus.rateLimited.includes(keyStatus.currentIndex) ? 'bg-yellow-900/20 border-yellow-700/50' : 'bg-[#1E1F20]'}
+                        `}
+                     >
+                        <div className={`px-2 py-1 border-r border-[#444746] ${keyStatus.rateLimited.includes(keyStatus.currentIndex) ? 'text-yellow-500' : 'bg-[#333537] text-[#A8C7FA]'}`}>
+                            Key {keyStatus.currentIndex + 1}
+                        </div>
+                    </button>
+
+                    {showKeyDropdown && (
+                        <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
+                            <div className="py-1">
+                                <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C]">Text Generation</div>
+                                {keyList.filter(k => !k.isTTS).map((k) => (
+                                    <button
+                                        key={k.index}
+                                        onClick={() => handleKeySelect(k.index)}
+                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] smooth-transition
+                                            ${k.isActive ? 'bg-[#333537/50]' : ''}
+                                            ${k.isRateLimited ? 'text-yellow-500' : 'text-[#C4C7C5]'}
+                                        `}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <span className={`w-1.5 h-1.5 rounded-full ${k.isActive ? 'bg-[#4285F4]' : 'bg-transparent'}`}></span>
+                                            <span className="font-mono">Key {k.index + 1}</span>
+                                            {k.isRateLimited && <span className="text-[10px] bg-yellow-900/30 px-1 rounded border border-yellow-700/50">429</span>}
+                                        </div>
+                                        <span className="font-mono text-[10px] opacity-70">{formatTokenCount(k.usage)}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                 </div>
+
+                {/* Mobile: Toggle to Canvas */}
+                <button 
+                    onClick={() => setMobileView('canvas')}
+                    className="md:hidden p-1.5 bg-[#4285F4] text-white rounded-md text-xs font-medium"
+                >
+                    Canvas &gt;
+                </button>
+
+                {/* Desktop: Expand Canvas */}
+                {isCanvasCollapsed && setIsCanvasCollapsed && (
+                    <button 
+                        onClick={() => setIsCanvasCollapsed(false)}
+                        className="hidden md:flex p-1.5 hover:bg-[#333537] text-[#E3E3E3] rounded-md border border-[#444746] smooth-transition"
+                        title="Open Canvas"
+                    >
+                        <ChevronDownIcon /> 
+                        <span className="text-xs ml-1">Canvas</span>
+                    </button>
+                )}
+            </div>
+        </div>
+
+        {/* --- Main Content Area based on Mode --- */}
+        <div className="flex-1 flex flex-col min-h-0 relative">
+            {chatMode === 'ai' && (
+                renderAIChat(false)
+            )}
+            {chatMode === 'user' && (
+                renderUserChat(false)
+            )}
+            {chatMode === 'both' && (
+                <div className="flex flex-col h-full">
+                    <div className="h-[50%] flex flex-col min-h-0 border-b border-[#444746]">
+                        {renderAIChat(true)}
+                    </div>
+                    <div className="h-[50%] flex flex-col min-h-0">
+                        {renderUserChat(true)}
+                    </div>
+                </div>
+            )}
+        </div>
+
       </div>
 
       {/* Right Panel */}

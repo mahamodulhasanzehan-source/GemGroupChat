@@ -1,3 +1,4 @@
+
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch, limit } from 'firebase/firestore';
@@ -25,6 +26,10 @@ const authListeners: ((user: any) => void)[] = [];
 // Structure: { [groupId]: { details: {}, messages: [] } }
 const mockDb: Record<string, any> = {};
 const mockListeners: Record<string, Function[]> = {};
+// New: User Chat Mock
+const mockUserChatDb: Record<string, any[]> = {}; // { groupId: [msgs] }
+const mockUserChatListeners: Record<string, Function[]> = {};
+
 // Mock Token Usage
 let mockTokenUsage: Record<string, any> = { key_0: 0, key_1: 0, key_2: 0, key_3: 0, activeKeyIndex: 0 };
 let mockUsageListener: ((data: any) => void) | null = null;
@@ -312,7 +317,7 @@ export const updateGroup = async (groupId: string, updates: any) => {
     await updateDoc(doc(db, 'groups', groupId), updates);
 };
 
-// Real-time Message Subscription
+// Real-time AI Chat Subscription
 export const subscribeToMessages = (groupId: string, callback: (messages: any[]) => void) => {
   // Offline Mode
   if (!isConfigured || !db) {
@@ -338,7 +343,33 @@ export const subscribeToMessages = (groupId: string, callback: (messages: any[])
   });
 };
 
-// Send Message
+// Real-time User Chat Subscription (New)
+export const subscribeToUserChat = (groupId: string, callback: (messages: any[]) => void) => {
+    // Offline Mode
+    if (!isConfigured || !db) {
+        if (!mockUserChatDb[groupId]) mockUserChatDb[groupId] = [];
+        if (!mockUserChatListeners[groupId]) mockUserChatListeners[groupId] = [];
+        mockUserChatListeners[groupId].push(callback);
+        callback(mockUserChatDb[groupId]);
+        return () => {
+            const idx = mockUserChatListeners[groupId].indexOf(callback);
+            if (idx > -1) mockUserChatListeners[groupId].splice(idx, 1);
+        };
+    }
+
+    // Real Mode
+    const q = query(
+        collection(db, 'groups', groupId, 'user_messages'),
+        orderBy('timestamp', 'asc')
+    );
+
+    return onSnapshot(q, (snapshot) => {
+        const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        callback(msgs);
+    });
+};
+
+// Send AI Prompt
 export const sendMessage = async (groupId: string, message: any) => {
   const msgData = { 
       ...message, 
@@ -359,6 +390,24 @@ export const sendMessage = async (groupId: string, message: any) => {
   // Real Mode
   await setDoc(doc(db, 'groups', groupId, 'messages', message.id), msgData);
 };
+
+// Send User Chat Message (New)
+export const sendUserChatMessage = async (groupId: string, message: any) => {
+    const msgData = {
+        ...message,
+        timestamp: Date.now()
+    };
+
+    if (!isConfigured || !db) {
+        if (!mockUserChatDb[groupId]) mockUserChatDb[groupId] = [];
+        mockUserChatDb[groupId].push(msgData);
+        mockUserChatListeners[groupId]?.forEach(cb => cb(mockUserChatDb[groupId]));
+        return;
+    }
+
+    await addDoc(collection(db, 'groups', groupId, 'user_messages'), msgData);
+};
+
 
 // Update Message
 export const updateMessage = async (groupId: string, messageId: string, updates: any) => {
