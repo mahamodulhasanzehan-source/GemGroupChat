@@ -16,6 +16,9 @@ interface ChatInterfaceProps {
   messages: Message[]; 
   setMessages: any;    
   groupId?: string;
+  // New props for audio settings
+  aiVoice?: string;
+  playbackSpeed?: number;
 }
 
 // Custom Stop Icon
@@ -31,7 +34,10 @@ const formatTokenCount = (num: number) => {
     return num.toString();
 };
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
+    currentUser, groupId, 
+    aiVoice = 'Fenrir', playbackSpeed = 1.2 // Defaults if not provided
+}) => {
   const [input, setInput] = useState('');
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
   const [groupDetails, setGroupDetails] = useState<Group | null>(null);
@@ -140,15 +146,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       }
 
       // 3. Check Cache
-      let url = audioCache[msgId];
+      // Note: We might want to invalidate cache if voice changes, 
+      // but for simplicity, we assume cached audio is "fixed" unless page reload.
+      // If user wants new voice, they might need to reload or we can add cache key suffix.
+      // Let's add voice suffix to cache key to support switching.
+      const cacheKey = `${msgId}_${aiVoice}`;
+      let url = audioCache[cacheKey];
 
       // 4. If not in cache, generate it now (On-Demand)
       if (!url) {
           setGeneratingAudioIds(prev => new Set(prev).add(msgId));
           try {
-              url = await generateSpeech(text) || '';
+              url = await generateSpeech(text, aiVoice) || '';
               if (url) {
-                  setAudioCache(prev => ({ ...prev, [msgId]: url }));
+                  setAudioCache(prev => ({ ...prev, [cacheKey]: url }));
               }
           } finally {
               setGeneratingAudioIds(prev => {
@@ -162,7 +173,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       // 5. Play if we have a URL
       if (url) {
           const audio = new Audio(url);
-          audio.playbackRate = 1.3; // Set speed to 1.3x
+          audio.playbackRate = playbackSpeed; // Use prop
           audioRef.current = audio;
           audio.onended = () => setPlayingMessageId(null);
           audio.play().catch(e => console.error("Playback failed", e));
@@ -335,9 +346,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           // Pre-set generating status so UI shows spinner immediately
           setGeneratingAudioIds(prev => new Set(prev).add(modelMsgId));
           try {
-            const audioUrl = await generateSpeech(accumulatedText);
+            // Pass the current selected voice
+            const audioUrl = await generateSpeech(accumulatedText, aiVoice);
             if (audioUrl) {
-                setAudioCache(prev => ({ ...prev, [modelMsgId]: audioUrl }));
+                // Cache with voice key
+                const cacheKey = `${modelMsgId}_${aiVoice}`;
+                setAudioCache(prev => ({ ...prev, [cacheKey]: audioUrl }));
             }
           } finally {
             setGeneratingAudioIds(prev => {

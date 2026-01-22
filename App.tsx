@@ -58,7 +58,7 @@ const WelcomeScreen = ({ onCreate, onJoin }: { onCreate: () => void, onJoin: () 
 };
 
 // Wrapper to handle layout based on auth status
-const Layout = ({ children, currentUser, onSignOut }: any) => {
+const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbackSpeed, setPlaybackSpeed }: any) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [modalState, setModalState] = useState<{isOpen: boolean, mode: 'create' | 'join'}>({ isOpen: false, mode: 'create' });
 
@@ -70,6 +70,10 @@ const Layout = ({ children, currentUser, onSignOut }: any) => {
         onCreateGroup={() => setModalState({ isOpen: true, mode: 'create' })}
         onJoinGroup={() => setModalState({ isOpen: true, mode: 'join' })}
         currentUser={currentUser}
+        aiVoice={aiVoice}
+        setAiVoice={setAiVoice}
+        playbackSpeed={playbackSpeed}
+        setPlaybackSpeed={setPlaybackSpeed}
       />
       <div className="flex-1 h-full flex flex-col relative">
          {/* If children is a function (render prop), pass handlers, otherwise just render */}
@@ -92,7 +96,7 @@ const Layout = ({ children, currentUser, onSignOut }: any) => {
 };
 
 // Chat Page Wrapper
-const ChatPage = ({ currentUser }: { currentUser: UserProfile }) => {
+const ChatPage = ({ currentUser, aiVoice, playbackSpeed }: { currentUser: UserProfile, aiVoice: string, playbackSpeed: number }) => {
     const location = useLocation();
     
     // Extract Group ID from path if present (using hash router)
@@ -100,7 +104,13 @@ const ChatPage = ({ currentUser }: { currentUser: UserProfile }) => {
     const groupId = isGroup ? location.pathname.split('/')[2] : undefined;
 
     return (
-        <Layout currentUser={currentUser}>
+        <Layout 
+            currentUser={currentUser} 
+            aiVoice={aiVoice} 
+            setAiVoice={() => {}} 
+            playbackSpeed={playbackSpeed} 
+            setPlaybackSpeed={() => {}}
+        >
            {({ onCreate, onJoin }: any) => (
                groupId ? (
                    <ChatInterface 
@@ -108,6 +118,8 @@ const ChatPage = ({ currentUser }: { currentUser: UserProfile }) => {
                         messages={[]} 
                         setMessages={() => {}} 
                         groupId={groupId}
+                        aiVoice={aiVoice}
+                        playbackSpeed={playbackSpeed}
                     />
                ) : (
                    <WelcomeScreen onCreate={onCreate} onJoin={onJoin} />
@@ -121,6 +133,10 @@ const ChatPage = ({ currentUser }: { currentUser: UserProfile }) => {
 const App: React.FC = () => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Lifted State for Audio Settings
+  const [aiVoice, setAiVoice] = useState('Fenrir');
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.2); // Default to 1.2x
 
   useEffect(() => {
     // Use the unified subscription that handles both Real and Mock auth
@@ -160,13 +176,48 @@ const App: React.FC = () => {
       <Routes>
         <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/" />} />
         
-        <Route path="/" element={
-            user ? <ChatPage currentUser={user} /> : <Navigate to="/login" />
-        } />
+        <Route 
+            path="/" 
+            element={
+                user ? (
+                    <Layout 
+                        currentUser={user}
+                        aiVoice={aiVoice}
+                        setAiVoice={setAiVoice}
+                        playbackSpeed={playbackSpeed}
+                        setPlaybackSpeed={setPlaybackSpeed}
+                    >
+                        {({ onCreate, onJoin }: any) => <WelcomeScreen onCreate={onCreate} onJoin={onJoin} />}
+                    </Layout>
+                ) : <Navigate to="/login" />
+            } 
+        />
 
-        <Route path="/group/:groupId" element={
-            user ? <ChatPage currentUser={user} /> : <Navigate to="/login" />
-        } />
+        <Route 
+            path="/group/:groupId" 
+            element={
+                user ? (
+                    <Layout 
+                        currentUser={user}
+                        aiVoice={aiVoice}
+                        setAiVoice={setAiVoice}
+                        playbackSpeed={playbackSpeed}
+                        setPlaybackSpeed={setPlaybackSpeed}
+                    >
+                        {() => (
+                            <ChatInterface 
+                                currentUser={user} 
+                                messages={[]} 
+                                setMessages={() => {}} 
+                                groupId={window.location.hash.split('/').pop()}
+                                aiVoice={aiVoice}
+                                playbackSpeed={playbackSpeed}
+                            />
+                        )}
+                    </Layout>
+                ) : <Navigate to="/login" />
+            } 
+        />
 
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" />} />

@@ -99,12 +99,12 @@ export const signInWithGoogle = async () => {
   }
 };
 
-export const updateUserProfile = async (name: string) => {
+export const updateUserProfile = async (updates: { displayName?: string, photoURL?: string }) => {
     if (isConfigured && auth && auth.currentUser) {
-        await updateProfile(auth.currentUser, { displayName: name });
+        await updateProfile(auth.currentUser, updates);
         auth.updateCurrentUser(auth.currentUser); 
     } else if (mockUser) {
-        mockUser = { ...mockUser, displayName: name };
+        mockUser = { ...mockUser, ...updates };
         notifyMockListeners();
     }
 }
