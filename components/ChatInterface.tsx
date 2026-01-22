@@ -53,7 +53,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const [tokenUsage, setTokenUsage] = useState<any>({});
   
   // Audio State
-  // Cache stores Blob URLs locally. We don't save audio to Firestore to save bandwidth/storage.
+  // Cache stores Blob URLs locally.
   const [audioCache, setAudioCache] = useState<Record<string, string>>({}); 
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -592,16 +592,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                     code(props) {
                                         const {children, className, node, ...rest} = props
                                         const match = /language-(\w+)/.exec(className || '')
-                                        // If it's HTML, we might want to suppress it if it's large, but user asked to be like Gemini
-                                        // which often shows it too. We'll leave it but add a badge.
+                                        // "Directly codes in canvas" - Hide large code blocks from chat bubble
                                         if (match) {
                                             return (
-                                                <div className="flex flex-col gap-1">
-                                                     <div className="flex items-center justify-between text-[10px] text-[#A8C7FA] font-mono bg-[#1E1F20] px-2 py-1 rounded-t border border-b-0 border-[#444746]">
-                                                        <span>{match[1]}</span>
-                                                        <span className="opacity-70">Writing to Canvas...</span>
-                                                     </div>
-                                                     <code {...rest} className={`${className} bg-[#131314] px-2 py-2 rounded-b text-xs border border-[#444746] overflow-x-auto`}>{children}</code>
+                                                <div className="my-1 flex items-center gap-2 p-2 bg-[#1A1A1C] border border-[#444746] rounded text-xs text-[#A8C7FA]">
+                                                     <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                                     <span className="font-mono">Canvas Updated ({match[1]})</span>
                                                 </div>
                                             );
                                         }
