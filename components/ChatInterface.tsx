@@ -338,8 +338,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       }
   };
   
-  const visibleMessages = localMessages.filter(m => m.status !== 'queued' && !hiddenMessageIds.has(m.id));
+  // Show ALL messages, including queued ones, so everyone sees them immediately
+  const visibleMessages = localMessages.filter(m => !hiddenMessageIds.has(m.id));
+  
+  // For the status bar logic
   const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
+  
+  // Identify who is currently being processed
+  const currentProcessingMsg = localMessages.find(m => m.id === groupDetails?.processingMessageId);
   const isSystemBusy = !!groupDetails?.processingMessageId;
 
   // Key Selection Logic
@@ -461,19 +467,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             </div>
         </div>
 
-        {/* Messages List & Input Area (Unchanged logic, just re-rendering) */}
+        {/* Messages List & Input Area */}
         <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center scroll-smooth relative">
             <div className="w-full space-y-6 pb-4">
                 {visibleMessages.map((msg, index) => {
                 const isMe = msg.senderId === currentUser.uid;
                 const isGemini = msg.role === 'model';
+                // ALL user roles go on the right, AI goes on the left
+                const isUserRole = msg.role === 'user';
+                
                 const myMessages = visibleMessages.filter(m => m.senderId === currentUser.uid);
                 const isMyLatest = myMessages.length > 0 && myMessages[myMessages.length - 1].id === msg.id;
+
+                const isQueued = msg.status === 'queued';
 
                 return (
                     <div 
                         key={msg.id} 
-                        className={`group relative flex gap-3 ${isMe && !isGemini ? 'flex-row-reverse' : 'flex-row'} animate-[fadeIn_0.3s_ease-out]`}
+                        className={`group relative flex gap-3 ${isUserRole ? 'flex-row-reverse' : 'flex-row'} animate-[fadeIn_0.3s_ease-out]`}
                         onMouseEnter={() => setHoveredMessageId(msg.id)}
                         onMouseLeave={() => setHoveredMessageId(null)}
                     >
@@ -485,9 +496,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                             )}
                         </div>
                     
-                        <div className={`flex flex-col max-w-[90%] ${isMe && !isGemini ? 'items-end' : 'items-start'}`}>
-                            <div className={`prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm ${isMe && !isGemini ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}`}>
-                            <ReactMarkdown
+                        <div className={`flex flex-col max-w-[90%] ${isUserRole ? 'items-end' : 'items-start'}`}>
+                            {/* Message Bubble */}
+                            <div className={`
+                                prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm
+                                ${isUserRole ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}
+                                ${isQueued ? 'opacity-50 border border-dashed border-[#444746]' : ''}
+                            `}>
+                                {isQueued && (
+                                    <div className="text-[10px] text-[#A8C7FA] flex items-center gap-2 mb-1">
+                                        <div className="w-3 h-3 border-2 border-[#A8C7FA] border-t-transparent rounded-full animate-spin"></div>
+                                        <span>Waiting in queue...</span>
+                                    </div>
+                                )}
+                                <ReactMarkdown
                                     components={{
                                     code(props) {
                                         const {children, className, node, ...rest} = props
@@ -509,12 +531,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                         </div>
 
                         {!isGemini && hoveredMessageId === msg.id && (
-                            <div className={`flex items-center opacity-0 group-hover:opacity-100 transition-opacity self-center ${isMe ? 'mr-1' : 'ml-1'}`}>
+                            <div className={`flex items-center opacity-0 group-hover:opacity-100 transition-opacity self-center ${isUserRole ? 'mr-1' : 'ml-1'}`}>
                                 <div className="relative group/menu">
                                     <button className="p-1 text-[#C4C7C5] hover:text-white hover:bg-[#333537] rounded">
                                         <DotsHorizontalIcon />
                                     </button>
-                                    <div className={`absolute top-0 ${isMe ? 'right-full mr-1' : 'left-full ml-1'} bg-[#1E1F20] border border-[#444746] rounded shadow-lg z-10 w-24 overflow-hidden`}>
+                                    <div className={`absolute top-0 ${isUserRole ? 'right-full mr-1' : 'left-full ml-1'} bg-[#1E1F20] border border-[#444746] rounded shadow-lg z-10 w-24 overflow-hidden`}>
                                         {isMe && isMyLatest && (
                                             <button 
                                                 onClick={() => handleEdit(msg)}
@@ -540,38 +562,32 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
             </div>
         </div>
 
-        {queuedMessages.length > 0 && (
-            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 w-3/4 max-w-md bg-[#1E1F20]/90 backdrop-blur-md border border-[#444746] rounded-xl shadow-2xl p-3 z-20 animate-[slideUp_0.3s_ease-out]">
-                <div className="flex items-center justify-between mb-2 pb-2 border-b border-[#444746]/50">
-                    <span className="text-xs font-semibold text-[#A8C7FA] flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-[#A8C7FA] animate-pulse"></div>
-                        Queue ({queuedMessages.length})
-                    </span>
-                    <span className="text-[10px] text-[#C4C7C5]">AI Processing Sequentially</span>
-                </div>
-                <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
-                    {queuedMessages.map((msg, i) => (
-                        <div key={msg.id} className="flex items-start justify-between group p-2 rounded hover:bg-[#333537] transition-colors bg-[#131314]/50">
-                            <div className="flex gap-2 items-center overflow-hidden">
-                                <span className="text-[10px] text-[#C4C7C5] shrink-0 w-4">{i + 1}.</span>
-                                <div className="flex flex-col min-w-0">
-                                    <span className="text-[10px] font-bold text-[#E3E3E3]">{msg.senderName}</span>
-                                    <span className="text-xs text-[#C4C7C5] truncate">{msg.text}</span>
-                                </div>
-                            </div>
-                            {msg.senderId === currentUser.uid && (
-                                <button 
-                                    onClick={() => deleteMessage(groupId!, msg.id)}
-                                    className="text-[#C4C7C5] hover:text-red-400 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    title="Remove from queue"
-                                >
-                                    <TrashIcon />
-                                </button>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            </div>
+        {/* Status Bar - Shows when ANYONE is queued or processing */}
+        {(queuedMessages.length > 0 || isSystemBusy) && (
+             <div className="bg-[#1A1A1C] border-t border-[#444746] px-4 py-2 flex items-center justify-between z-30">
+                 <div className="flex items-center gap-2 text-xs">
+                    {isSystemBusy ? (
+                         <>
+                            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
+                            <span className="text-[#A8C7FA] font-medium">
+                                AI Generating response for {currentProcessingMsg?.senderName || 'Unknown User'}...
+                            </span>
+                         </>
+                    ) : (
+                        <>
+                             <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+                             <span className="text-[#C4C7C5]">
+                                {queuedMessages.length} message{queuedMessages.length !== 1 ? 's' : ''} pending processing
+                             </span>
+                        </>
+                    )}
+                 </div>
+                 {queuedMessages.length > 0 && (
+                     <div className="text-[10px] text-[#5E5E5E]">
+                         Next: {queuedMessages[0].senderName}
+                     </div>
+                 )}
+             </div>
         )}
 
         {/* Input */}
@@ -588,9 +604,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder={editingMessageId ? "Edit your prompt..." : isSystemBusy ? "Generating..." : "Type instructions..."}
+                    placeholder={editingMessageId ? "Edit your prompt..." : "Type instructions..."}
                     className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5]"
-                    disabled={isSystemBusy && !editingMessageId} 
                 />
                 
                 {isSystemBusy ? (
