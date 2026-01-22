@@ -447,6 +447,25 @@ export const deleteMessage = async (groupId: string, messageId: string) => {
     await deleteDoc(msgRef);
 }
 
+// Delete User Chat Message (New)
+export const deleteUserChatMessage = async (groupId: string, messageId: string) => {
+    // Offline Mode
+    if (!isConfigured || !db) {
+        if (mockUserChatDb[groupId]) {
+            const idx = mockUserChatDb[groupId].findIndex((m: any) => m.id === messageId);
+            if (idx > -1) {
+                mockUserChatDb[groupId].splice(idx, 1);
+                mockUserChatListeners[groupId]?.forEach(cb => cb(mockUserChatDb[groupId]));
+            }
+        }
+        return;
+    }
+
+    // Real Mode
+    const msgRef = doc(db, 'groups', groupId, 'user_messages', messageId);
+    await deleteDoc(msgRef);
+}
+
 // Subscribe to User Groups (Created + Joined)
 export const subscribeToUserGroups = (userId: string, callback: (groups: any[]) => void) => {
     if (!isConfigured || !db) {

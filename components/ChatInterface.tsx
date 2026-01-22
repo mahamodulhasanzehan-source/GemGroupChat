@@ -7,7 +7,7 @@ import {
     subscribeToGroupDetails, subscribeToTokenUsage, updateGroup,
     subscribeToCanvas, updateCanvas, 
     subscribeToPresence, updatePresence, setGroupLock,
-    subscribeToUserChat, sendUserChatMessage
+    subscribeToUserChat, sendUserChatMessage, deleteUserChatMessage
 } from '../services/firebase';
 import ReactMarkdown from 'react-markdown';
 import Canvas from './Canvas';
@@ -445,6 +445,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
   };
 
+  const handleUserChatDelete = async (msgId: string) => {
+    if (confirm("Delete this message?")) {
+        await deleteUserChatMessage(groupId!, msgId);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent, type: 'ai' | 'user' = 'ai') => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -684,7 +690,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       {userChatMessages.map((msg) => {
                           const isMe = msg.senderId === currentUser.uid;
                           return (
-                              <div key={msg.id} className={`flex gap-3 animate-[fadeIn_0.3s_ease-out] ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                              <div key={msg.id} className={`flex gap-3 animate-[fadeIn_0.3s_ease-out] group/msg ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
                                   <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shrink-0 overflow-hidden border border-[#444746]">
                                       {msg.photoURL ? (
                                           <img src={msg.photoURL} alt={msg.senderName} className="w-full h-full object-cover" />
@@ -696,10 +702,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                       <div className={`text-[10px] mb-1 ${isMe ? 'text-[#A8C7FA]' : 'text-[#C4C7C5]'}`}>
                                           {msg.senderName}
                                       </div>
-                                      <div className={`px-3 py-2 rounded-xl text-sm leading-relaxed break-words shadow-sm ${
-                                          isMe ? 'bg-[#4285F4] text-white rounded-tr-none' : 'bg-[#2A2B2D] text-[#E3E3E3] rounded-tl-none border border-[#444746]'
-                                      }`}>
-                                          {msg.text}
+                                      
+                                      <div className="flex items-center gap-2">
+                                         {/* Delete Button for User's own messages */}
+                                         {isMe && (
+                                             <button 
+                                                 onClick={() => handleUserChatDelete(msg.id)}
+                                                 className="opacity-0 group-hover/msg:opacity-100 p-1 text-[#C4C7C5] hover:text-red-400 transition-opacity"
+                                                 title="Delete message"
+                                             >
+                                                 <TrashIcon className="w-4 h-4" />
+                                             </button>
+                                         )}
+
+                                         <div className={`px-3 py-2 rounded-xl text-sm leading-relaxed break-words shadow-sm ${
+                                              isMe ? 'bg-[#4285F4] text-white rounded-tr-none' : 'bg-[#2A2B2D] text-[#E3E3E3] rounded-tl-none border border-[#444746]'
+                                          }`}>
+                                              {msg.text}
+                                         </div>
                                       </div>
                                   </div>
                               </div>
