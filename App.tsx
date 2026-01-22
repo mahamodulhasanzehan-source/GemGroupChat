@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { subscribeToAuth } from './services/firebase';
@@ -8,10 +9,22 @@ import GroupModal from './components/GroupModal';
 import { UserProfile } from './types';
 
 // Welcome Screen Component for Root Route
-const WelcomeScreen = ({ onCreate, onJoin }: { onCreate: () => void, onJoin: () => void }) => {
+const WelcomeScreen = ({ onCreate, onJoin, onOpenSidebar }: { onCreate: () => void, onJoin: () => void, onOpenSidebar: () => void }) => {
     return (
-        <div className="flex-1 h-full bg-[#131314] flex flex-col items-center justify-center p-6 text-center animate-[fadeIn_0.5s_ease-out]">
-            <div className="max-w-2xl space-y-8">
+        <div className="flex-1 h-full bg-[#131314] flex flex-col items-center justify-center p-6 text-center animate-[fadeIn_0.5s_ease-out] relative">
+            
+            {/* Mobile Header for Welcome Screen */}
+             <div className="absolute top-0 left-0 right-0 h-14 flex items-center justify-between px-4 md:hidden border-b border-[#444746]">
+                 <button onClick={onOpenSidebar} className="text-[#C4C7C5]">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                      </svg>
+                 </button>
+                 <span className="font-semibold text-sm text-[#E3E3E3]">GemGroupChat</span>
+                 <div className="w-6"></div> 
+            </div>
+
+            <div className="max-w-2xl space-y-8 mt-14 md:mt-0">
                 <h1 className="text-5xl font-medium tracking-tight">
                     <span className="gemini-gradient-text">Welcome to GemGroupChat</span>
                 </h1>
@@ -60,6 +73,7 @@ const WelcomeScreen = ({ onCreate, onJoin }: { onCreate: () => void, onJoin: () 
 // Wrapper to handle layout based on auth status
 const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbackSpeed, setPlaybackSpeed }: any) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   
   // State lifted from ChatInterface to manage exclusivity
   const [isCanvasCollapsed, setIsCanvasCollapsed] = useState(true); // Default closed
@@ -67,19 +81,14 @@ const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbac
 
   const [modalState, setModalState] = useState<{isOpen: boolean, mode: 'create' | 'join'}>({ isOpen: false, mode: 'create' });
 
-  // Logic: Sidebar Toggle
+  // Logic: Sidebar Toggle (Desktop)
   const handleSidebarToggle = (collapsed: boolean) => {
-      // If we are OPENING the sidebar (collapsed = false)
       if (!collapsed) {
-          // If canvas is currently open, we must close it, but remember it
           if (!isCanvasCollapsed) {
               setWasCanvasOpen(true);
               setIsCanvasCollapsed(true);
           }
-      } 
-      // If we are CLOSING the sidebar (collapsed = true)
-      else {
-          // If canvas was open before we opened the sidebar, restore it
+      } else {
           if (wasCanvasOpen) {
               setIsCanvasCollapsed(false);
           }
@@ -89,12 +98,9 @@ const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbac
 
   // Logic: Canvas Toggle (Passed down to ChatInterface)
   const handleCanvasToggle = (collapsed: boolean) => {
-      // If we are OPENING the canvas (collapsed = false)
       if (!collapsed) {
-          // Force Sidebar to collapse (Close sidebar)
           setIsSidebarCollapsed(true);
       } else {
-          // If user manually closes canvas, forget the memory
           setWasCanvasOpen(false);
       }
       setIsCanvasCollapsed(collapsed);
@@ -105,6 +111,8 @@ const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbac
       <Sidebar 
         isCollapsed={isSidebarCollapsed} 
         setIsCollapsed={handleSidebarToggle}
+        mobileOpen={isMobileSidebarOpen}
+        setMobileOpen={setIsMobileSidebarOpen}
         onCreateGroup={() => setModalState({ isOpen: true, mode: 'create' })}
         onJoinGroup={() => setModalState({ isOpen: true, mode: 'join' })}
         currentUser={currentUser}
@@ -120,7 +128,8 @@ const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbac
                 onCreate: () => setModalState({ isOpen: true, mode: 'create' }), 
                 onJoin: () => setModalState({ isOpen: true, mode: 'join' }),
                 isCanvasCollapsed,
-                setIsCanvasCollapsed: handleCanvasToggle
+                setIsCanvasCollapsed: handleCanvasToggle,
+                onOpenSidebar: () => setIsMobileSidebarOpen(true)
               }) 
             : children
          }
@@ -138,8 +147,6 @@ const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbac
 // Chat Page Wrapper
 const ChatPage = ({ currentUser, aiVoice, playbackSpeed }: { currentUser: UserProfile, aiVoice: string, playbackSpeed: number }) => {
     const location = useLocation();
-    
-    // Extract Group ID from path if present (using hash router)
     const isGroup = location.pathname.startsWith('/group/');
     const groupId = isGroup ? location.pathname.split('/')[2] : undefined;
 
@@ -160,12 +167,11 @@ const ChatPage = ({ currentUser, aiVoice, playbackSpeed }: { currentUser: UserPr
                         groupId={groupId}
                         aiVoice={aiVoice}
                         playbackSpeed={playbackSpeed}
-                        // Pass layout props
                         isCanvasCollapsed={isCanvasCollapsed}
                         setIsCanvasCollapsed={setIsCanvasCollapsed}
                     />
                ) : (
-                   <WelcomeScreen onCreate={onCreate} onJoin={onJoin} />
+                   <WelcomeScreen onCreate={onCreate} onJoin={onJoin} onOpenSidebar={() => {}} /> 
                )
            )}
         </Layout>
@@ -230,7 +236,7 @@ const App: React.FC = () => {
                         playbackSpeed={playbackSpeed}
                         setPlaybackSpeed={setPlaybackSpeed}
                     >
-                        {({ onCreate, onJoin }: any) => <WelcomeScreen onCreate={onCreate} onJoin={onJoin} />}
+                        {({ onCreate, onJoin, onOpenSidebar }: any) => <WelcomeScreen onCreate={onCreate} onJoin={onJoin} onOpenSidebar={onOpenSidebar} />}
                     </Layout>
                 ) : <Navigate to="/login" />
             } 
@@ -247,7 +253,7 @@ const App: React.FC = () => {
                         playbackSpeed={playbackSpeed}
                         setPlaybackSpeed={setPlaybackSpeed}
                     >
-                        {({ isCanvasCollapsed, setIsCanvasCollapsed }: any) => (
+                        {({ isCanvasCollapsed, setIsCanvasCollapsed, onOpenSidebar }: any) => (
                             <ChatInterface 
                                 currentUser={user} 
                                 messages={[]} 
@@ -257,6 +263,7 @@ const App: React.FC = () => {
                                 playbackSpeed={playbackSpeed}
                                 isCanvasCollapsed={isCanvasCollapsed}
                                 setIsCanvasCollapsed={setIsCanvasCollapsed}
+                                onOpenSidebar={onOpenSidebar}
                             />
                         )}
                     </Layout>

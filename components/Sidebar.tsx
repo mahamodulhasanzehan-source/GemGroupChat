@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { PlusIcon, UserGroupIcon, MenuIcon, TrashIcon, XMarkIcon, PencilIcon } from './Icons';
 import { updateUserProfile, subscribeToUserGroups, deleteGroupFull, signOut } from '../services/firebase';
@@ -6,10 +7,13 @@ import { useNavigate } from 'react-router-dom';
 interface SidebarProps {
   isCollapsed: boolean;
   setIsCollapsed: (v: boolean) => void;
+  // Mobile props
+  mobileOpen?: boolean;
+  setMobileOpen?: (v: boolean) => void;
+  // General props
   onCreateGroup: () => void;
   onJoinGroup: () => void;
   currentUser: any;
-  // Shared state for settings
   aiVoice?: string;
   setAiVoice?: (voice: string) => void;
   playbackSpeed?: number;
@@ -28,7 +32,8 @@ const AVATAR_PRESETS = [
 const AI_VOICES = ['Fenrir', 'Puck', 'Charon', 'Kore', 'Aoede'];
 
 const Sidebar: React.FC<SidebarProps> = ({ 
-    isCollapsed, setIsCollapsed, onCreateGroup, onJoinGroup, currentUser,
+    isCollapsed, setIsCollapsed, mobileOpen, setMobileOpen,
+    onCreateGroup, onJoinGroup, currentUser,
     aiVoice = 'Charon', setAiVoice, playbackSpeed = 1.5, setPlaybackSpeed
 }) => {
   const [isEditingName, setIsEditingName] = useState(false);
@@ -92,39 +97,54 @@ const Sidebar: React.FC<SidebarProps> = ({
   const createdGroups = myGroups.filter(g => g.createdBy === currentUser?.uid);
   const joinedGroups = myGroups.filter(g => g.createdBy !== currentUser?.uid);
 
-  return (
-    <div className={`flex flex-col h-full bg-[#1E1F20] smooth-transition ${isCollapsed ? 'w-[72px]' : 'w-[280px]'} border-r border-[#444746] relative`}>
-      <div className="p-4 flex items-center justify-between smooth-transition">
+  const handleGroupClick = (groupId: string) => {
+      navigate(`/group/${groupId}`);
+      if (setMobileOpen) setMobileOpen(false);
+  }
+
+  const sidebarContent = (
+    <>
+      <div className="p-4 flex items-center justify-between smooth-transition shrink-0">
         <button 
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors smooth-transition"
+          className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors smooth-transition hidden md:block"
         >
           <MenuIcon />
         </button>
+        {/* Mobile Close Button */}
+        <div className="md:hidden w-full flex justify-between items-center">
+             <span className="font-semibold text-[#E3E3E3]">Menu</span>
+             <button 
+                onClick={() => setMobileOpen && setMobileOpen(false)}
+                className="p-1 text-[#C4C7C5] hover:text-white"
+             >
+                 <XMarkIcon />
+             </button>
+        </div>
       </div>
 
-      <div className="px-3 pb-4 space-y-2 smooth-transition">
+      <div className="px-3 pb-4 space-y-2 smooth-transition shrink-0">
         {/* Create Group - Primary Action */}
         <button 
-          onClick={onCreateGroup}
-          className={`flex items-center gap-3 bg-[#1A1A1C] hover:bg-[#282A2C] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 border border-[#444746] smooth-transition ${isCollapsed ? 'justify-center px-2' : ''}`}
+          onClick={() => { onCreateGroup(); if(setMobileOpen) setMobileOpen(false); }}
+          className={`flex items-center gap-3 bg-[#1A1A1C] hover:bg-[#282A2C] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 border border-[#444746] smooth-transition ${isCollapsed ? 'md:justify-center md:px-2' : ''}`}
         >
           <PlusIcon />
-          {!isCollapsed && <span className="text-sm font-medium animate-[fadeIn_0.5s_ease-out]">Create Group</span>}
+          <span className={`${isCollapsed ? 'md:hidden' : ''} text-sm font-medium animate-[fadeIn_0.5s_ease-out]`}>Create Group</span>
         </button>
 
         {/* Join Group - Secondary Action */}
         <button 
-          onClick={onJoinGroup}
-          className={`flex items-center gap-3 hover:bg-[#333537] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 smooth-transition ${isCollapsed ? 'justify-center px-2' : ''}`}
+          onClick={() => { onJoinGroup(); if(setMobileOpen) setMobileOpen(false); }}
+          className={`flex items-center gap-3 hover:bg-[#333537] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 smooth-transition ${isCollapsed ? 'md:justify-center md:px-2' : ''}`}
         >
           <UserGroupIcon />
-          {!isCollapsed && <span className="text-sm font-medium animate-[fadeIn_0.5s_ease-out]">Join a group</span>}
+          <span className={`${isCollapsed ? 'md:hidden' : ''} text-sm font-medium animate-[fadeIn_0.5s_ease-out]`}>Join a group</span>
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 space-y-6 smooth-transition">
-        {!isCollapsed && (
+        {(!isCollapsed || mobileOpen) && (
              <div className="animate-[fadeIn_0.5s_ease-out]">
                 {/* Created By Me */}
                 <div>
@@ -136,7 +156,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             {createdGroups.map(group => (
                                 <div 
                                     key={group.id}
-                                    onClick={() => navigate(`/group/${group.id}`)}
+                                    onClick={() => handleGroupClick(group.id)}
                                     className="group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors smooth-transition"
                                 >
                                     <span className="text-sm text-[#E3E3E3] truncate">{group.name}</span>
@@ -162,7 +182,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                              {joinedGroups.map(group => (
                                 <div 
                                     key={group.id}
-                                    onClick={() => navigate(`/group/${group.id}`)}
+                                    onClick={() => handleGroupClick(group.id)}
                                     className="group flex items-center px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors smooth-transition"
                                 >
                                     <span className="text-sm text-[#E3E3E3] truncate">{group.name}</span>
@@ -175,9 +195,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      <div className="p-3 border-t border-[#444746] smooth-transition">
+      <div className="p-3 border-t border-[#444746] smooth-transition shrink-0">
         <div 
-            className={`flex items-center gap-2 mt-2 p-2 rounded-lg cursor-pointer hover:bg-[#333537] transition-colors smooth-transition ${isCollapsed ? 'justify-center' : ''}`}
+            className={`flex items-center gap-2 mt-2 p-2 rounded-lg cursor-pointer hover:bg-[#333537] transition-colors smooth-transition ${isCollapsed ? 'md:justify-center' : ''}`}
             onClick={() => setIsProfileModalOpen(true)}
         >
            {/* User Profile Mini */}
@@ -189,15 +209,36 @@ const Sidebar: React.FC<SidebarProps> = ({
                )}
            </div>
            
-           {!isCollapsed && (
-             <div className="flex flex-col flex-1 overflow-hidden animate-[fadeIn_0.3s_ease-out]">
+           <div className={`${isCollapsed ? 'md:hidden' : ''} flex flex-col flex-1 overflow-hidden animate-[fadeIn_0.3s_ease-out]`}>
                 <span className="text-sm text-[#E3E3E3] truncate font-medium" title={currentUser?.displayName}>
                     {currentUser?.displayName || 'Guest User'}
                 </span>
                 <span className="text-[10px] text-[#C4C7C5]">Settings</span>
              </div>
-           )}
         </div>
+      </div>
+    </>
+  );
+
+  return (
+    <>
+      {/* Desktop Sidebar */}
+      <div className={`hidden md:flex flex-col h-full bg-[#1E1F20] smooth-transition ${isCollapsed ? 'w-[72px]' : 'w-[280px]'} border-r border-[#444746] relative`}>
+        {sidebarContent}
+      </div>
+
+      {/* Mobile Drawer */}
+      <div className={`md:hidden fixed inset-0 z-50 pointer-events-none ${mobileOpen ? 'pointer-events-auto' : ''}`}>
+           {/* Backdrop */}
+           <div 
+             className={`absolute inset-0 bg-black/60 transition-opacity duration-300 ${mobileOpen ? 'opacity-100' : 'opacity-0'}`}
+             onClick={() => setMobileOpen && setMobileOpen(false)}
+           />
+           
+           {/* Sidebar Panel */}
+           <div className={`absolute top-0 bottom-0 left-0 w-[85%] max-w-[300px] bg-[#1E1F20] border-r border-[#444746] shadow-2xl transition-transform duration-300 flex flex-col ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+               {sidebarContent}
+           </div>
       </div>
 
       {/* --- Profile Settings Modal --- */}
@@ -354,7 +395,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               </div>
           </div>
       )}
-    </div>
+    </>
   );
 };
 

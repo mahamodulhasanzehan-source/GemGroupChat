@@ -1,5 +1,6 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon, XMarkIcon } from './Icons';
+import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon, XMarkIcon, MenuIcon, CodeBracketIcon } from './Icons';
 import { Message, CanvasState, Presence, Group, UserChatMessage } from '../types';
 import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS, base64ToWav } from '../services/geminiService';
 import { 
@@ -23,6 +24,7 @@ interface ChatInterfaceProps {
   playbackSpeed?: number;
   isCanvasCollapsed?: boolean;
   setIsCanvasCollapsed?: (v: boolean) => void;
+  onOpenSidebar?: () => void; // New prop for mobile sidebar toggle
 }
 
 const StopIcon = ({ className }: { className?: string }) => (
@@ -46,7 +48,8 @@ const formatTokenCount = (num: number) => {
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
     currentUser, groupId, 
     aiVoice = 'Charon', playbackSpeed = 1.5,
-    isCanvasCollapsed = true, setIsCanvasCollapsed
+    isCanvasCollapsed = true, setIsCanvasCollapsed,
+    onOpenSidebar
 }) => {
   // Input states
   const [input, setInput] = useState('');
@@ -195,7 +198,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }, [groupId, currentUser]);
 
   // --- WebRTC Audio Logic (PeerJS) ---
-  // Fix: Monitor remote call ending
   useEffect(() => {
       if (groupDetails && groupDetails.isCallActive === false && isInCall) {
           console.log("Call ended remotely, leaving...");
@@ -225,8 +227,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       if (!groupId) return;
 
       try {
-          // 1. Get Local Stream with optimized latency constraints
-          // Fix: Type casting to any to support 'latency' constraint which might not be in standard types yet
           const constraints: any = {
               audio: { 
                   echoCancellation: true,
@@ -242,7 +242,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           localStreamRef.current = stream;
           setIsMuted(false);
 
-          // 2. Initialize Peer
           const peer = new Peer(currentUser.uid); // Use UID as Peer ID
           peerRef.current = peer;
 
@@ -252,7 +251,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               await joinCallSession(groupId, currentUser.uid);
               setIsInCall(true);
               
-              // 4. Connect to existing participants
               if (groupDetails?.callParticipants) {
                   groupDetails.callParticipants.forEach(pid => {
                       if (pid !== currentUser.uid) {
@@ -262,15 +260,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               }
           });
 
-          // 5. Handle Incoming Calls
           peer.on('call', (call) => {
               console.log('Incoming call from:', call.peer);
-              call.answer(stream); // Answer with our stream
+              call.answer(stream); 
               handleCallStream(call);
               callsRef.current.push(call);
           });
           
-          // Setup Audio Context for Visualizer (Mixing Local + Remote)
           setupAudioMixing(stream);
 
       } catch (e) {
@@ -310,23 +306,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       analyser.fftSize = 32;
       analyserRef.current = analyser;
 
-      // Master Gain for visualizer input
       const masterGain = audioCtx.createGain();
       masterGain.connect(analyser);
 
-      // Add Local Stream
       const localSource = audioCtx.createMediaStreamSource(localStream);
       localSource.connect(masterGain);
       sourceNodesRef.current.push(localSource);
 
-      // Start Visualizer Loop
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       const updateVisualizer = () => {
           if (!analyserRef.current) return;
           analyserRef.current.getByteFrequencyData(dataArray);
           
           const points = [dataArray[0], dataArray[2], dataArray[4], dataArray[6], dataArray[8]]
-              .map(val => Math.max(10, val / 2.55)); // Normalize to % (0-100ish)
+              .map(val => Math.max(10, val / 2.55));
 
           setVisualizerData(points);
           animationFrameRef.current = requestAnimationFrame(updateVisualizer);
@@ -346,13 +339,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const leaveCall = async () => {
-      // 1. Cleanup Media
       if (localStreamRef.current) {
           localStreamRef.current.getTracks().forEach(track => track.stop());
           localStreamRef.current = null;
       }
       
-      // 2. Cleanup Audio Context
       if (audioContextRef.current) {
           audioContextRef.current.close();
           audioContextRef.current = null;
@@ -363,7 +354,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
       sourceNodesRef.current = [];
 
-      // 3. Close Peer Connections
       callsRef.current.forEach(call => call.close());
       callsRef.current = [];
       if (peerRef.current) {
@@ -375,7 +365,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setIsInCall(false);
       setVisualizerData(new Array(5).fill(10));
 
-      // 4. Update Firestore
       if (groupId) {
           await leaveCallSession(groupId, currentUser.uid);
       }
@@ -1110,9 +1099,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   );
 
   return (
-    <div className="flex h-full bg-[#131314] overflow-hidden smooth-transition">
+    <div className="flex h-full bg-[#131314] overflow-hidden smooth-transition relative">
         
-      {/* Left Panel */}
+      {/* Left Panel (Main Content) */}
       <div className={`flex flex-col border-r border-[#444746] smooth-transition
             ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'} 
             ${isCanvasCollapsed ? 'md:w-full max-w-4xl mx-auto md:border-r-0' : 'md:w-[35%] md:min-w-[350px]'}
@@ -1120,6 +1109,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         
         {/* Top Bar */}
         <div className="h-14 shrink-0 flex items-center justify-between px-4 border-b border-[#444746] bg-[#131314]">
+            
+            {/* Mobile Sidebar Toggle (Left Button) */}
+            <button 
+                onClick={onOpenSidebar}
+                className="md:hidden p-1.5 mr-2 text-[#C4C7C5] hover:text-white"
+            >
+                <MenuIcon />
+            </button>
+
             <div className="flex items-center gap-3 relative min-w-0 flex-1">
                 <span className="text-[#E3E3E3] font-medium tracking-tight truncate max-w-[100px] shrink-0">
                     {groupDetails?.name || 'Chat'}
@@ -1247,12 +1245,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     )}
                  </div>
 
-                {/* Mobile: Toggle to Canvas */}
+                {/* Mobile: Toggle to Canvas (Right Button) */}
                 <button 
                     onClick={() => setMobileView('canvas')}
-                    className="md:hidden p-1.5 bg-[#4285F4] text-white rounded-md text-xs font-medium"
+                    className="md:hidden p-1.5 ml-2 text-[#C4C7C5] hover:text-white"
                 >
-                    Canvas &gt;
+                    <CodeBracketIcon />
                 </button>
 
                 {/* Desktop: Expand Canvas */}
@@ -1291,11 +1289,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       </div>
 
-      {/* Right Panel */}
+      {/* Right Panel (Canvas) - Desktop */}
       {!isCanvasCollapsed && (
-          <div className={`flex-1 h-full flex flex-col min-w-0 smooth-transition
-              ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'}`
-          }>
+          <div className="hidden md:flex flex-col min-w-0 smooth-transition flex-1 h-full">
              <div className="h-8 bg-[#1E1F20] border-b border-[#444746] flex items-center justify-end px-2">
                  <button 
                     onClick={() => setIsCanvasCollapsed && setIsCanvasCollapsed(true)}
@@ -1309,11 +1305,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <Canvas 
                     canvasState={canvasState} 
                     groupId={groupId || 'demo'} 
-                    onCloseMobile={() => setMobileView('chat')}
                 />
              </div>
           </div>
       )}
+
+      {/* Mobile Canvas Overlay */}
+      <div className={`md:hidden fixed inset-0 z-50 bg-[#1E1F20] transition-transform duration-300 ${mobileView === 'canvas' ? 'translate-y-0' : 'translate-y-full'}`}>
+          <Canvas 
+             canvasState={canvasState} 
+             groupId={groupId || 'demo'} 
+             onCloseMobile={() => setMobileView('chat')}
+          />
+      </div>
 
     </div>
   );

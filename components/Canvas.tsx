@@ -1,9 +1,10 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CanvasState } from '../types';
 import { updateCanvas } from '../services/firebase';
-import { ChevronDownIcon, DownloadIcon } from './Icons';
+import { ChevronDownIcon, DownloadIcon, XMarkIcon } from './Icons';
 
 interface CanvasProps {
   canvasState: CanvasState;
@@ -108,7 +109,7 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
                     onClick={onCloseMobile}
                     className="md:hidden p-1 mr-1 text-[#C4C7C5] hover:text-white"
                 >
-                    <ChevronDownIcon className="rotate-90" />
+                    <XMarkIcon />
                 </button>
             )}
 
