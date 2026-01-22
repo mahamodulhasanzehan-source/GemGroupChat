@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PlusIcon, UserGroupIcon, MenuIcon, TrashIcon, XMarkIcon } from './Icons';
+import { PlusIcon, UserGroupIcon, MenuIcon, TrashIcon, XMarkIcon, PencilIcon } from './Icons';
 import { updateUserProfile, subscribeToUserGroups, deleteGroupFull } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
 
@@ -75,6 +75,13 @@ const Sidebar: React.FC<SidebarProps> = ({
   const handleAvatarSelect = (url: string) => {
       updateUserProfile({ photoURL: url });
   }
+
+  const handleCustomAvatar = () => {
+      const url = prompt("Enter image URL for your profile picture:");
+      if (url && url.trim().startsWith('http')) {
+          updateUserProfile({ photoURL: url.trim() });
+      }
+  };
 
   const createdGroups = myGroups.filter(g => g.createdBy === currentUser?.uid);
   const joinedGroups = myGroups.filter(g => g.createdBy !== currentUser?.uid);
@@ -202,12 +209,23 @@ const Sidebar: React.FC<SidebarProps> = ({
                   
                   {/* Avatar Section */}
                   <div className="flex flex-col items-center mb-6">
-                      <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center text-2xl font-bold text-white overflow-hidden mb-4 border-2 border-[#444746]">
-                        {currentUser?.photoURL ? (
-                            <img src={currentUser.photoURL} alt="User" className="w-full h-full object-cover" />
-                        ) : (
-                            <span>{currentUser?.displayName?.[0] || 'U'}</span>
-                        )}
+                      <div className="relative">
+                          <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center text-2xl font-bold text-white overflow-hidden mb-4 border-2 border-[#444746]">
+                            {currentUser?.photoURL ? (
+                                <img src={currentUser.photoURL} alt="User" className="w-full h-full object-cover" />
+                            ) : (
+                                <span>{currentUser?.displayName?.[0] || 'U'}</span>
+                            )}
+                          </div>
+                          
+                          {/* Custom Avatar Upload Button */}
+                          <button 
+                             onClick={handleCustomAvatar}
+                             className="absolute bottom-4 right-0 p-1.5 bg-[#4285F4] text-white rounded-full hover:bg-[#3367D6] border border-[#1E1F20] shadow-sm"
+                             title="Upload Custom Avatar URL"
+                          >
+                             <PencilIcon className="w-3 h-3" />
+                          </button>
                       </div>
                       
                       {/* Name Edit */}
@@ -226,7 +244,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <div className="flex items-center gap-2 mb-4">
                             <span className="font-medium text-[#E3E3E3]">{currentUser?.displayName}</span>
                             <button onClick={() => { setTempName(currentUser?.displayName || ''); setIsEditingName(true); }} className="text-[#C4C7C5] hover:text-white">
-                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                <PencilIcon className="w-3 h-3" />
                             </button>
                         </div>
                       )}

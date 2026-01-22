@@ -60,13 +60,51 @@ const WelcomeScreen = ({ onCreate, onJoin }: { onCreate: () => void, onJoin: () 
 // Wrapper to handle layout based on auth status
 const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbackSpeed, setPlaybackSpeed }: any) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  
+  // State lifted from ChatInterface to manage exclusivity
+  const [isCanvasCollapsed, setIsCanvasCollapsed] = useState(true); // Default closed
+  const [wasCanvasOpen, setWasCanvasOpen] = useState(false); // Memory state
+
   const [modalState, setModalState] = useState<{isOpen: boolean, mode: 'create' | 'join'}>({ isOpen: false, mode: 'create' });
+
+  // Logic: Sidebar Toggle
+  const handleSidebarToggle = (collapsed: boolean) => {
+      // If we are OPENING the sidebar (collapsed = false)
+      if (!collapsed) {
+          // If canvas is currently open, we must close it, but remember it
+          if (!isCanvasCollapsed) {
+              setWasCanvasOpen(true);
+              setIsCanvasCollapsed(true);
+          }
+      } 
+      // If we are CLOSING the sidebar (collapsed = true)
+      else {
+          // If canvas was open before we opened the sidebar, restore it
+          if (wasCanvasOpen) {
+              setIsCanvasCollapsed(false);
+          }
+      }
+      setIsSidebarCollapsed(collapsed);
+  };
+
+  // Logic: Canvas Toggle (Passed down to ChatInterface)
+  const handleCanvasToggle = (collapsed: boolean) => {
+      // If we are OPENING the canvas (collapsed = false)
+      if (!collapsed) {
+          // Force Sidebar to collapse (Close sidebar)
+          setIsSidebarCollapsed(true);
+      } else {
+          // If user manually closes canvas, forget the memory
+          setWasCanvasOpen(false);
+      }
+      setIsCanvasCollapsed(collapsed);
+  };
 
   return (
     <div className="flex h-screen w-full bg-[#131314] text-[#E3E3E3] font-sans overflow-hidden">
       <Sidebar 
         isCollapsed={isSidebarCollapsed} 
-        setIsCollapsed={setIsSidebarCollapsed}
+        setIsCollapsed={handleSidebarToggle}
         onCreateGroup={() => setModalState({ isOpen: true, mode: 'create' })}
         onJoinGroup={() => setModalState({ isOpen: true, mode: 'join' })}
         currentUser={currentUser}
@@ -76,11 +114,13 @@ const Layout = ({ children, currentUser, onSignOut, aiVoice, setAiVoice, playbac
         setPlaybackSpeed={setPlaybackSpeed}
       />
       <div className="flex-1 h-full flex flex-col relative">
-         {/* If children is a function (render prop), pass handlers, otherwise just render */}
+         {/* Pass layout state/handlers to children via render prop */}
          {typeof children === 'function' 
             ? children({ 
                 onCreate: () => setModalState({ isOpen: true, mode: 'create' }), 
-                onJoin: () => setModalState({ isOpen: true, mode: 'join' }) 
+                onJoin: () => setModalState({ isOpen: true, mode: 'join' }),
+                isCanvasCollapsed,
+                setIsCanvasCollapsed: handleCanvasToggle
               }) 
             : children
          }
@@ -111,7 +151,7 @@ const ChatPage = ({ currentUser, aiVoice, playbackSpeed }: { currentUser: UserPr
             playbackSpeed={playbackSpeed} 
             setPlaybackSpeed={() => {}}
         >
-           {({ onCreate, onJoin }: any) => (
+           {({ onCreate, onJoin, isCanvasCollapsed, setIsCanvasCollapsed }: any) => (
                groupId ? (
                    <ChatInterface 
                         currentUser={currentUser} 
@@ -120,6 +160,9 @@ const ChatPage = ({ currentUser, aiVoice, playbackSpeed }: { currentUser: UserPr
                         groupId={groupId}
                         aiVoice={aiVoice}
                         playbackSpeed={playbackSpeed}
+                        // Pass layout props
+                        isCanvasCollapsed={isCanvasCollapsed}
+                        setIsCanvasCollapsed={setIsCanvasCollapsed}
                     />
                ) : (
                    <WelcomeScreen onCreate={onCreate} onJoin={onJoin} />
@@ -204,7 +247,7 @@ const App: React.FC = () => {
                         playbackSpeed={playbackSpeed}
                         setPlaybackSpeed={setPlaybackSpeed}
                     >
-                        {() => (
+                        {({ isCanvasCollapsed, setIsCanvasCollapsed }: any) => (
                             <ChatInterface 
                                 currentUser={user} 
                                 messages={[]} 
@@ -212,6 +255,8 @@ const App: React.FC = () => {
                                 groupId={window.location.hash.split('/').pop()}
                                 aiVoice={aiVoice}
                                 playbackSpeed={playbackSpeed}
+                                isCanvasCollapsed={isCanvasCollapsed}
+                                setIsCanvasCollapsed={setIsCanvasCollapsed}
                             />
                         )}
                     </Layout>

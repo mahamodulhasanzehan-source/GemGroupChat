@@ -19,6 +19,9 @@ interface ChatInterfaceProps {
   // New props for audio settings
   aiVoice?: string;
   playbackSpeed?: number;
+  // Lifted Canvas State
+  isCanvasCollapsed?: boolean;
+  setIsCanvasCollapsed?: (v: boolean) => void;
 }
 
 // Custom Stop Icon
@@ -36,7 +39,8 @@ const formatTokenCount = (num: number) => {
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
     currentUser, groupId, 
-    aiVoice = 'Charon', playbackSpeed = 1.5 // Defaults if not provided
+    aiVoice = 'Charon', playbackSpeed = 1.5,
+    isCanvasCollapsed = true, setIsCanvasCollapsed
 }) => {
   const [input, setInput] = useState('');
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
@@ -45,7 +49,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // UI State
-  const [isCanvasCollapsed, setIsCanvasCollapsed] = useState(false);
+  // isCanvasCollapsed is now a prop
   const [mobileView, setMobileView] = useState<'chat' | 'canvas'>('chat');
 
   const [showOnlineUsers, setShowOnlineUsers] = useState(false);
@@ -146,10 +150,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
 
       // 3. Check Cache
-      // Note: We might want to invalidate cache if voice changes, 
-      // but for simplicity, we assume cached audio is "fixed" unless page reload.
-      // If user wants new voice, they might need to reload or we can add cache key suffix.
-      // Let's add voice suffix to cache key to support switching.
       const cacheKey = `${msgId}_${aiVoice}`;
       let url = audioCache[cacheKey];
 
@@ -305,7 +305,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                        setCanvasState(prev => ({ ...prev, html: codeUpdates.html!, lastUpdated: Date.now() }));
                        
                        // 2. Auto-open canvas if closed and content is generating
-                       if (isCanvasCollapsed) setIsCanvasCollapsed(false);
+                       if (isCanvasCollapsed && setIsCanvasCollapsed) setIsCanvasCollapsed(false);
 
                        // 3. Throttled Firestore Update (Shared State)
                        const now = Date.now();
@@ -577,7 +577,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 </button>
 
                 {/* Desktop: Expand Canvas */}
-                {isCanvasCollapsed && (
+                {isCanvasCollapsed && setIsCanvasCollapsed && (
                     <button 
                         onClick={() => setIsCanvasCollapsed(false)}
                         className="hidden md:flex p-1.5 hover:bg-[#333537] text-[#E3E3E3] rounded-md border border-[#444746]"
@@ -789,7 +789,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           }>
              <div className="h-8 bg-[#1E1F20] border-b border-[#444746] flex items-center justify-end px-2">
                  <button 
-                    onClick={() => setIsCanvasCollapsed(true)}
+                    onClick={() => setIsCanvasCollapsed && setIsCanvasCollapsed(true)}
                     className="hidden md:block p-1 hover:bg-[#333537] text-[#C4C7C5] rounded"
                     title="Collapse Canvas"
                  >
