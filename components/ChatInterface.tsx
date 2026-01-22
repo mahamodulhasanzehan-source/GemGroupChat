@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon } from './Icons';
+import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon } from './Icons';
 import { Message, CanvasState, Presence, Group } from '../types';
-import { streamGeminiResponse, subscribeToKeyStatus, setManualKey, TOTAL_KEYS } from '../services/geminiService';
+import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS } from '../services/geminiService';
 import { 
     subscribeToMessages, sendMessage, updateMessage, deleteMessage,
     subscribeToGroupDetails, subscribeToTokenUsage, updateGroup,
@@ -52,6 +52,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
   const [canvasState, setCanvasState] = useState<CanvasState>({ html: '', css: '', js: '', lastUpdated: 0, terminalOutput: [] });
   const [tokenUsage, setTokenUsage] = useState<any>({});
   
+  // Audio State
+  // Cache stores Blob URLs locally. We don't save audio to Firestore to save bandwidth/storage.
+  const [audioCache, setAudioCache] = useState<Record<string, string>>({}); 
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   // Key Management State
   const [keyStatus, setKeyStatus] = useState<{ currentIndex: number, rateLimited: number[] }>({ currentIndex: 0, rateLimited: [] });
   const [showKeyDropdown, setShowKeyDropdown] = useState(false);
@@ -114,7 +120,33 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       };
   }, [groupId, currentUser]);
 
+  // Audio Player Logic
+  const handlePlayAudio = (msgId: string) => {
+      const url = audioCache[msgId];
+      if (!url) return;
+
+      if (playingMessageId === msgId) {
+          // Stop
+          if (audioRef.current) {
+              audioRef.current.pause();
+              audioRef.current.currentTime = 0;
+          }
+          setPlayingMessageId(null);
+      } else {
+          // Play new
+          if (audioRef.current) {
+              audioRef.current.pause();
+          }
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audio.onended = () => setPlayingMessageId(null);
+          audio.play();
+          setPlayingMessageId(msgId);
+      }
+  };
+
   const extractCode = (text: string) => {
+      // Try to match HTML code blocks, capturing even partial content
       const htmlMatch = text.match(/```html\s*([\s\S]*?)(```|$)/i);
       const genericMatch = text.match(/```\s*([\s\S]*?)(```|$)/i);
       let code = null;
@@ -215,8 +247,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           validHistory.push({ role: 'user', text: `[${userMsg.senderName}]: ${userMsg.text}` });
 
           let accumulatedText = '';
-          let lastUpdateTime = 0;
-          const UPDATE_THROTTLE = 200;
+          
+          // Separate throttle timers for smoother updates
+          let lastMessageUpdateTime = 0;
+          let lastCanvasUpdateTime = 0;
+          const MESSAGE_THROTTLE = 150; // Fast chat updates
+          const CANVAS_THROTTLE = 600;  // Slower canvas updates to prevent firestore spam
 
           await streamGeminiResponse(
               userMsg.text,
@@ -226,16 +262,27 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                   accumulatedText += chunk;
                   
                   const codeUpdates = extractCode(accumulatedText);
-                  if (codeUpdates.html && codeUpdates.html.length > canvasState.html.length) {
+                  
+                  // Canvas Updates
+                  if (codeUpdates.html) {
+                       // 1. Optimistic Local Update (Instant)
+                       setCanvasState(prev => ({ ...prev, html: codeUpdates.html!, lastUpdated: Date.now() }));
+                       
+                       // 2. Auto-open canvas if closed and content is generating
+                       if (isCanvasCollapsed) setIsCanvasCollapsed(false);
+
+                       // 3. Throttled Firestore Update (Shared State)
                        const now = Date.now();
-                       if (now - lastUpdateTime > 500) {
+                       if (now - lastCanvasUpdateTime > CANVAS_THROTTLE) {
+                           lastCanvasUpdateTime = now;
                            await updateCanvas(groupId, { html: codeUpdates.html });
                        }
                   }
 
+                  // Message Updates
                   const now = Date.now();
-                  if (now - lastUpdateTime > UPDATE_THROTTLE) {
-                      lastUpdateTime = now;
+                  if (now - lastMessageUpdateTime > MESSAGE_THROTTLE) {
+                      lastMessageUpdateTime = now;
                       await updateMessage(groupId, modelMsgId, { 
                           text: accumulatedText,
                           isLoading: true 
@@ -245,6 +292,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
               abortController.signal
           );
 
+          // Final update to ensure consistency
           const finalCode = extractCode(accumulatedText);
           if (finalCode.html) {
               await updateCanvas(groupId, { html: finalCode.html });
@@ -254,6 +302,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
           await updateMessage(groupId, userMsg.id, { status: 'done' });
           
           await updateGroup(groupId, { processingMessageId: null });
+
+          // --- TRIGGER BACKGROUND SPEECH GENERATION ---
+          // This runs after text generation is complete to avoid context switching too much
+          // Uses Key 5 exclusively.
+          console.log("Generating Audio in background...");
+          const audioUrl = await generateSpeech(accumulatedText);
+          if (audioUrl) {
+              setAudioCache(prev => ({ ...prev, [modelMsgId]: audioUrl }));
+          }
 
       } catch (e: any) {
           console.error("Error generating or Aborted", e);
@@ -359,7 +416,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
       const usage = tokenUsage[`key_${i}`] || 0;
       const isRateLimited = keyStatus.rateLimited.includes(i);
       const isActive = keyStatus.currentIndex === i;
-      return { index: i, usage, isRateLimited, isActive };
+      const isTTS = i === 4; // Key 5 is index 4
+      return { index: i, usage, isRateLimited, isActive, isTTS };
   });
 
   return (
@@ -421,9 +479,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                     </button>
 
                     {showKeyDropdown && (
-                        <div className="absolute top-full right-0 mt-2 w-56 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden">
+                        <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden">
                             <div className="py-1">
-                                {keyList.map((k) => (
+                                <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C]">Text Generation</div>
+                                {keyList.filter(k => !k.isTTS).map((k) => (
                                     <button
                                         key={k.index}
                                         onClick={() => handleKeySelect(k.index)}
@@ -439,6 +498,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                         </div>
                                         <span className="font-mono text-[10px] opacity-70">{formatTokenCount(k.usage)}</span>
                                     </button>
+                                ))}
+                                
+                                <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C] border-t border-[#444746]">Speech (TTS)</div>
+                                {keyList.filter(k => k.isTTS).map((k) => (
+                                    <div
+                                        key={k.index}
+                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] transition-colors cursor-default text-[#A8C7FA]`}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                                            <span className="font-mono">Key {k.index + 1}</span>
+                                            {k.isRateLimited && <span className="text-[10px] bg-yellow-900/30 px-1 rounded border border-yellow-700/50">429</span>}
+                                        </div>
+                                        <span className="font-mono text-[10px] opacity-70">{formatTokenCount(k.usage)}</span>
+                                    </div>
                                 ))}
                             </div>
                         </div>
@@ -480,6 +554,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                 const isMyLatest = myMessages.length > 0 && myMessages[myMessages.length - 1].id === msg.id;
 
                 const isQueued = msg.status === 'queued';
+                
+                // Check if audio exists for this message
+                const hasAudio = !!audioCache[msg.id];
+                const isPlaying = playingMessageId === msg.id;
 
                 return (
                     <div 
@@ -514,10 +592,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                     code(props) {
                                         const {children, className, node, ...rest} = props
                                         const match = /language-(\w+)/.exec(className || '')
+                                        // If it's HTML, we might want to suppress it if it's large, but user asked to be like Gemini
+                                        // which often shows it too. We'll leave it but add a badge.
                                         if (match) {
                                             return (
-                                                <div className="my-1 p-2 bg-[#131314] border border-[#444746] rounded text-xs text-[#A8C7FA] font-mono flex items-center gap-2">
-                                                    <span>📄 Parsing {match[1]} to Canvas...</span>
+                                                <div className="flex flex-col gap-1">
+                                                     <div className="flex items-center justify-between text-[10px] text-[#A8C7FA] font-mono bg-[#1E1F20] px-2 py-1 rounded-t border border-b-0 border-[#444746]">
+                                                        <span>{match[1]}</span>
+                                                        <span className="opacity-70">Writing to Canvas...</span>
+                                                     </div>
+                                                     <code {...rest} className={`${className} bg-[#131314] px-2 py-2 rounded-b text-xs border border-[#444746] overflow-x-auto`}>{children}</code>
                                                 </div>
                                             );
                                         }
@@ -528,6 +612,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ currentUser, groupId }) =
                                     {msg.text}
                                 </ReactMarkdown>
                             </div>
+                            
+                            {/* Audio Player Button (Below bubble, visible if audio exists) */}
+                            {isGemini && hasAudio && !msg.isLoading && (
+                                <button
+                                    onClick={() => handlePlayAudio(msg.id)}
+                                    className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border transition-colors
+                                        ${isPlaying ? 'bg-[#4285F4] text-white border-[#4285F4]' : 'bg-[#1E1F20] text-[#C4C7C5] border-[#444746] hover:text-white'}
+                                    `}
+                                >
+                                    {isPlaying ? <StopCircleIcon /> : <SpeakerIcon />}
+                                    <span>{isPlaying ? 'Stop' : 'Play'}</span>
+                                </button>
+                            )}
+
                         </div>
 
                         {!isGemini && hoveredMessageId === msg.id && (

@@ -1,5 +1,6 @@
 
 export const GEMINI_MODEL = 'gemini-3-flash-preview';
+export const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 
 // Fallback images
 export const DEFAULT_AVATAR = 'https://picsum.photos/100/100';

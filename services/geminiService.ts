@@ -1,9 +1,10 @@
-import { GoogleGenAI } from "@google/genai";
-import { GEMINI_MODEL } from "../constants";
-import { updateTokenUsage, getSystemConfig } from "./firebase";
+import { GoogleGenAI, Modality } from "@google/genai";
+import { GEMINI_MODEL, GEMINI_TTS_MODEL } from "../constants";
+import { updateTokenUsage } from "./firebase";
 import { CanvasState } from "../types";
 
 // 1. Define Keys Array
+// Keys 0-3 are for Text/Code. Key 4 is exclusively for TTS.
 const API_KEYS = [
   process.env.GEMINI_API_KEY_1,
   process.env.GEMINI_API_KEY_2,
@@ -14,9 +15,11 @@ const API_KEYS = [
 ].filter(Boolean) as string[];
 
 export const TOTAL_KEYS = API_KEYS.length;
+const TEXT_KEYS_COUNT = 4; // First 4 keys for text
+const SPEECH_KEY_INDEX = 4; // 5th key (index 4) for TTS
 
 // 2. State
-let currentKeyIndex = 0;
+let currentKeyIndex = 0; // Only cycles 0-3
 let aiClient: GoogleGenAI | null = null;
 let activeKey: string | null = null;
 
@@ -48,6 +51,7 @@ export const subscribeToKeyStatus = (callback: (status: { currentIndex: number, 
 };
 
 export const setManualKey = (index: number) => {
+    // Allow selecting Key 5 manually for visualization, but logic mostly respects TEXT/SPEECH split
     if (index >= 0 && index < API_KEYS.length) {
         currentKeyIndex = index;
         aiClient = null; // Force client recreate
@@ -57,24 +61,35 @@ export const setManualKey = (index: number) => {
     }
 };
 
-// Helper to get or create client with current key
+// Helper to get or create client with current key (For Text)
 const getClient = (): GoogleGenAI => {
-  const keyToUse = API_KEYS[currentKeyIndex];
+  // Ensure we are using one of the text keys (unless manually overridden to 4)
+  const keyIndexToUse = currentKeyIndex < TEXT_KEYS_COUNT ? currentKeyIndex : currentKeyIndex;
+  const keyToUse = API_KEYS[keyIndexToUse];
   
   if (!keyToUse) {
     throw new Error("No API keys found in configuration.");
   }
 
   if (!aiClient || activeKey !== keyToUse) {
-    // console.log(`[Gemini Service] Initializing Client with Key Index: ${currentKeyIndex}`);
     aiClient = new GoogleGenAI({ apiKey: keyToUse });
     activeKey = keyToUse;
   }
   return aiClient;
 };
 
+// Helper for Speech Client (Always uses Key 5)
+const getSpeechClient = (): GoogleGenAI => {
+    const speechKey = API_KEYS[SPEECH_KEY_INDEX];
+    if (!speechKey) {
+        throw new Error("Speech Key (Key 5) is missing.");
+    }
+    return new GoogleGenAI({ apiKey: speechKey });
+}
+
 const switchToNextKey = () => {
-    currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
+    // Only cycle through the first 4 keys (0, 1, 2, 3)
+    currentKeyIndex = (currentKeyIndex + 1) % TEXT_KEYS_COUNT;
     aiClient = null;
     activeKey = null;
     console.warn(`[Gemini Service] Switching to Key ${currentKeyIndex + 1}`);
@@ -83,6 +98,52 @@ const switchToNextKey = () => {
 
 // Delay helper
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- Audio Utilities ---
+
+// Convert Base64 PCM to WAV Blob URL
+const base64ToWav = (base64Data: string, sampleRate = 24000) => {
+    const binaryString = atob(base64Data);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+    }
+    
+    // Gemini returns Int16 PCM usually. Let's assume 1 channel, 16-bit.
+    const wavHeader = new ArrayBuffer(44);
+    const view = new DataView(wavHeader);
+    
+    // RIFF chunk descriptor
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + len, true); // File size
+    writeString(view, 8, 'WAVE');
+    
+    // fmt sub-chunk
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+    view.setUint16(20, 1, true); // AudioFormat (1 for PCM)
+    view.setUint16(22, 1, true); // NumChannels (1 for Mono)
+    view.setUint32(24, sampleRate, true); // SampleRate
+    view.setUint32(28, sampleRate * 2, true); // ByteRate (SampleRate * NumChannels * BitsPerSample/8)
+    view.setUint16(32, 2, true); // BlockAlign (NumChannels * BitsPerSample/8)
+    view.setUint16(34, 16, true); // BitsPerSample
+    
+    // data sub-chunk
+    writeString(view, 36, 'data');
+    view.setUint32(40, len, true);
+    
+    const blob = new Blob([view, bytes], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+};
+
+const writeString = (view: DataView, offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+    }
+};
+
+// --- Text Generation ---
 
 export const streamGeminiResponse = async (
   prompt: string, 
@@ -97,7 +158,8 @@ export const streamGeminiResponse = async (
   }
 
   let attempts = 0;
-  const maxAttempts = API_KEYS.length; // Try each key once
+  // Limit max attempts to the number of TEXT keys
+  const maxAttempts = TEXT_KEYS_COUNT; 
   let success = false;
 
   const systemInstruction = `
@@ -132,9 +194,13 @@ export const streamGeminiResponse = async (
     if (signal?.aborted) throw new Error("Aborted by user");
 
     try {
+      // Ensure we are looking at a text key
+      if (currentKeyIndex >= TEXT_KEYS_COUNT) {
+          currentKeyIndex = 0; // Reset to first text key if we wandered
+      }
+      
       const ai = getClient();
       
-      // Attempt to count tokens (optional, doesn't break flow)
       let inputTokens = 0;
       try {
         const countResult = await ai.models.countTokens({
@@ -170,10 +236,9 @@ export const streamGeminiResponse = async (
          }
       }
 
-      // If we got here, request was successful
       success = true;
 
-      // Update Usage
+      // Update Usage for Text Key
       let totalTokens = 0;
       if (usageMetadata) {
           totalTokens = usageMetadata.totalTokenCount;
@@ -200,13 +265,12 @@ export const streamGeminiResponse = async (
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
       
-      // Check for specific "limit: 0" which means model unavailable or billing issue
       const isQuotaZero = error.message?.includes('limit: 0');
 
       if (isRateLimit) {
           rateLimitedKeys.add(currentKeyIndex);
           if (isQuotaZero) {
-              console.warn(`[Gemini] Key ${currentKeyIndex + 1} has 0 quota for model ${GEMINI_MODEL}. It may be disabled or invalid for this key.`);
+              console.warn(`[Gemini] Key ${currentKeyIndex + 1} has 0 quota for model ${GEMINI_MODEL}.`);
           } else {
               console.warn(`[Gemini] Key ${currentKeyIndex + 1} hit rate limit.`);
           }
@@ -216,18 +280,66 @@ export const streamGeminiResponse = async (
 
       attempts++;
       
-      // If we haven't tried all keys yet, switch to next and retry loop
       if (attempts < maxAttempts) {
           switchToNextKey();
-          await delay(1000); // Small delay before retry
-          continue; // Retry loop
+          await delay(1000); 
+          continue; 
       }
       
-      // If we exhausted all keys
       if (attempts >= maxAttempts) {
          onChunk(`\n\n*Error: Unable to generate response. All ${maxAttempts} keys failed. Last error: ${error.message}*`);
-         return; // Exit
+         return; 
       }
     }
   }
 };
+
+// --- Speech Generation ---
+
+export const generateSpeech = async (text: string): Promise<string | null> => {
+    // 1. Filter out code blocks to prevent reading code
+    const cleanText = text
+        .replace(/```[\s\S]*?```/g, '') // Remove multi-line code blocks
+        .replace(/`.*?`/g, '') // Remove inline code
+        .replace(/<[^>]*>/g, '') // Remove HTML tags just in case
+        .trim();
+
+    if (!cleanText || cleanText.length < 2) return null;
+
+    try {
+        const ai = getSpeechClient();
+        
+        // Use single-turn generateContent for TTS
+        const response = await ai.models.generateContent({
+            model: GEMINI_TTS_MODEL,
+            contents: [{ parts: [{ text: cleanText }] }],
+            config: {
+                responseModalities: [Modality.AUDIO],
+                speechConfig: {
+                    voiceConfig: {
+                        prebuiltVoiceConfig: { voiceName: 'Charon' }
+                    }
+                }
+            }
+        });
+
+        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (base64Audio) {
+            // Track Usage for Key 5 (Index 4)
+            const usage = response.usageMetadata;
+            if (usage) {
+                updateTokenUsage(SPEECH_KEY_INDEX, usage.totalTokenCount);
+            }
+            
+            // Convert to WAV immediately for playback
+            return base64ToWav(base64Audio);
+        }
+
+    } catch (e: any) {
+        console.error("[Gemini TTS] Failed to generate speech:", e);
+        // We do not fallback for TTS, as it is exclusive to Key 5
+        rateLimitedKeys.add(SPEECH_KEY_INDEX);
+        notifyListeners();
+    }
+    return null;
+}
