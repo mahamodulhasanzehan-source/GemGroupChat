@@ -43,6 +43,7 @@ export interface Group {
   lockedBy?: string | null; // UID of user currently editing/prompting
   lockedAt?: number;
   processingMessageId?: string | null; // ID of the message currently being processed by AI
+  isCallActive?: boolean; // New: status of voice call
 }
 
 export interface CanvasState {

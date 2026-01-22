@@ -253,7 +253,7 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
   if (!isConfigured || !db) {
       const mockId = 'offline-group-' + Date.now();
       mockDb[mockId] = {
-          details: { id: mockId, name: normalizedName, createdBy: creatorId, createdAt: Date.now(), members: [creatorId], processingMessageId: null },
+          details: { id: mockId, name: normalizedName, createdBy: creatorId, createdAt: Date.now(), members: [creatorId], processingMessageId: null, isCallActive: false },
           messages: []
       };
       // Init Canvas for group
@@ -268,7 +268,8 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
     createdBy: creatorId,
     createdAt: Date.now(),
     members: [creatorId],
-    processingMessageId: null
+    processingMessageId: null,
+    isCallActive: false
   });
   // Init Canvas State
   await setDoc(doc(db, 'groups', groupRef.id, 'canvas', 'current'), {
@@ -316,6 +317,16 @@ export const updateGroup = async (groupId: string, updates: any) => {
     }
     await updateDoc(doc(db, 'groups', groupId), updates);
 };
+
+export const setGroupCallState = async (groupId: string, isActive: boolean) => {
+    if (!isConfigured || !db) {
+        if (mockDb[groupId]) {
+            mockDb[groupId].details.isCallActive = isActive;
+        }
+        return;
+    }
+    await updateDoc(doc(db, 'groups', groupId), { isCallActive: isActive });
+}
 
 // Real-time AI Chat Subscription
 export const subscribeToMessages = (groupId: string, callback: (messages: any[]) => void) => {

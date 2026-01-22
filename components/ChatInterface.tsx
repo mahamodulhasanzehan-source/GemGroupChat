@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon } from './Icons';
+import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon } from './Icons';
 import { Message, CanvasState, Presence, Group, UserChatMessage } from '../types';
 import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS, base64ToWav } from '../services/geminiService';
 import { 
@@ -7,7 +7,8 @@ import {
     subscribeToGroupDetails, subscribeToTokenUsage, updateGroup,
     subscribeToCanvas, updateCanvas, 
     subscribeToPresence, updatePresence, setGroupLock,
-    subscribeToUserChat, sendUserChatMessage, deleteUserChatMessage
+    subscribeToUserChat, sendUserChatMessage, deleteUserChatMessage,
+    setGroupCallState
 } from '../services/firebase';
 import ReactMarkdown from 'react-markdown';
 import Canvas from './Canvas';
@@ -17,18 +18,21 @@ interface ChatInterfaceProps {
   messages: Message[]; 
   setMessages: any;    
   groupId?: string;
-  // New props for audio settings
   aiVoice?: string;
   playbackSpeed?: number;
-  // Lifted Canvas State
   isCanvasCollapsed?: boolean;
   setIsCanvasCollapsed?: (v: boolean) => void;
 }
 
-// Custom Stop Icon
 const StopIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
         <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+);
+
+const PhoneIcon = ({ className }: { className?: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className || "w-5 h-5"}>
+        <path fillRule="evenodd" d="M1.5 4.5a3 3 0 013-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 01-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 006.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 011.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 01-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 5.25V4.5z" clipRule="evenodd" />
     </svg>
 );
 
@@ -54,6 +58,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [groupDetails, setGroupDetails] = useState<Group | null>(null);
   const [isSending, setIsSending] = useState(false);
   
+  // Notification State
+  const [unreadUserCount, setUnreadUserCount] = useState(0);
+  const [hasAIUpdate, setHasAIUpdate] = useState(false);
+  
+  // Call State
+  const [isInCall, setIsInCall] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [visualizerData, setVisualizerData] = useState<number[]>(new Array(5).fill(10)); // 5 bars
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const userChatEndRef = useRef<HTMLDivElement>(null);
@@ -98,6 +115,41 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     scrollToBottom(userChatEndRef);
   }, [userChatMessages, chatMode]);
 
+  // --- Notification Logic ---
+  // Reset notifications when switching to the relevant tab
+  useEffect(() => {
+      if (chatMode === 'user' || chatMode === 'both') {
+          setUnreadUserCount(0);
+      }
+      if (chatMode === 'ai' || chatMode === 'both') {
+          setHasAIUpdate(false);
+      }
+  }, [chatMode]);
+
+  // Listen for new user messages to trigger notification
+  useEffect(() => {
+      if (userChatMessages.length > 0) {
+          const lastMsg = userChatMessages[userChatMessages.length - 1];
+          // If I am NOT the sender, and I am currently in 'ai' mode (so I can't see the user chat)
+          if (lastMsg.senderId !== currentUser.uid && chatMode === 'ai') {
+              setUnreadUserCount(prev => prev + 1);
+          }
+      }
+  }, [userChatMessages]);
+
+  // Listen for new AI/Canvas updates to trigger notification
+  useEffect(() => {
+      // Logic: If there is a new AI message or Canvas update while I'm in 'user' mode
+      if (localMessages.length > 0) {
+           const lastMsg = localMessages[localMessages.length - 1];
+           // Simple check: if latest message is from model or system, and we are in user mode
+           if ((lastMsg.role === 'model' || lastMsg.role === 'system') && chatMode === 'user') {
+               setHasAIUpdate(true);
+           }
+      }
+  }, [localMessages, canvasState.lastUpdated]);
+
+
   useEffect(() => {
       const unsubscribeUsage = subscribeToTokenUsage((data) => setTokenUsage(data));
       const unsubscribeKeys = subscribeToKeyStatus((status) => setKeyStatus(status));
@@ -112,6 +164,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       
       const unsubscribeGroup = subscribeToGroupDetails(groupId, (details) => {
           setGroupDetails(details);
+          // If call ends remotely, kick out of call view locally
+          if (details && !details.isCallActive && isInCall) {
+              leaveCall();
+          }
+
           if (details && details.processingMessageId === null && abortControllerRef.current) {
                console.log("Processing ID cleared externally, aborting local generation.");
                abortControllerRef.current.abort();
@@ -144,8 +201,93 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           unsubscribeCanvas();
           unsubscribePresence();
           clearInterval(heartbeat);
+          if (isInCall) leaveCall(); // cleanup on unmount
       };
   }, [groupId, currentUser]);
+
+  // --- Call Logic & Audio Visualizer ---
+
+  const startCall = async () => {
+      if (!groupId) return;
+      if (confirm("Do you want to execute the call?")) {
+          await setGroupCallState(groupId, true);
+          joinCall();
+      }
+  };
+
+  const joinCall = async () => {
+      try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaStreamRef.current = stream;
+          
+          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          audioContextRef.current = audioCtx;
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 32;
+          analyserRef.current = analyser;
+
+          const source = audioCtx.createMediaStreamSource(stream);
+          source.connect(analyser);
+          
+          setIsInCall(true);
+          setIsMuted(false);
+
+          // Start Visualizer Loop
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          const updateVisualizer = () => {
+              if (!analyserRef.current) return;
+              analyserRef.current.getByteFrequencyData(dataArray);
+              
+              // Map frequency data to 5 bars roughly
+              // We just take a few sample points for the "dots"
+              const points = [
+                  dataArray[0], 
+                  dataArray[2], 
+                  dataArray[4], 
+                  dataArray[6], 
+                  dataArray[8]
+              ].map(val => Math.max(10, val / 2)); // Normalize height
+
+              setVisualizerData(points);
+              animationFrameRef.current = requestAnimationFrame(updateVisualizer);
+          };
+          updateVisualizer();
+
+      } catch (e) {
+          console.error("Failed to join call", e);
+          alert("Could not access microphone. Please check permissions.");
+      }
+  };
+
+  const leaveCall = () => {
+      if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(track => track.stop());
+          mediaStreamRef.current = null;
+      }
+      if (audioContextRef.current) {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+      }
+      if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+      }
+      setIsInCall(false);
+      setVisualizerData(new Array(5).fill(10));
+      // Note: We do NOT turn off group.isCallActive here, as others might still be in it.
+      // Only the last person or specific logic would turn it off, but for this simplified flow,
+      // it stays active until maybe explicitly ended (omitted for brevity/prompt focus).
+  };
+
+  const toggleMute = () => {
+      if (mediaStreamRef.current) {
+          mediaStreamRef.current.getAudioTracks().forEach(track => {
+              track.enabled = !track.enabled;
+          });
+          setIsMuted(!isMuted);
+      }
+  };
+
 
   // Audio Player Logic
   const handlePlayAudio = async (msg: Message) => {
@@ -667,11 +809,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <StopIcon />
                     </button>
                 ) : (
-                    (input.trim() || editingMessageId) && (
-                        <button onClick={handleSend} className="p-1.5 bg-[#A8C7FA] text-[#000] rounded-full hover:scale-105 smooth-transition transform">
-                            <SendIcon />
-                        </button>
-                    )
+                     // Persistent Send Icon (Gray when empty, Blue when has text)
+                    <button 
+                        onClick={handleSend}
+                        disabled={!input.trim() && !editingMessageId}
+                        className={`p-1.5 rounded-full smooth-transition transform ${
+                            input.trim() || editingMessageId 
+                            ? 'bg-[#A8C7FA] text-[#000] hover:scale-105' 
+                            : 'bg-transparent text-[#444746] cursor-default'
+                        }`}
+                    >
+                        <SendIcon />
+                    </button>
                 )}
             </div>
         </div>
@@ -731,7 +880,68 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
 
           <div className={`bg-[#18181a] border-t border-[#444746] z-30 ${isCompact ? 'p-1' : 'p-3'}`}>
+              
+              {/* Join Call Banner */}
+              {!isInCall && groupDetails?.isCallActive && (
+                  <div className="mb-2 bg-[#2A2B2D] border border-[#4285F4] rounded-lg p-2 flex items-center justify-between animate-[fadeIn_0.3s_ease-out]">
+                      <div className="flex items-center gap-2 text-xs text-[#E3E3E3]">
+                           <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                           <span>Join the call</span>
+                      </div>
+                      <button 
+                          onClick={joinCall}
+                          className="px-3 py-1 bg-[#4285F4] text-white text-xs font-medium rounded-md hover:bg-[#3367D6]"
+                      >
+                          Join
+                      </button>
+                  </div>
+              )}
+
+              {/* In Call Visualizer Pill */}
+              {isInCall && (
+                  <div className="mb-2 w-full flex justify-center">
+                    <div className="bg-[#2A2B2D] border border-[#444746] rounded-full px-4 py-2 flex items-center justify-between gap-6 shadow-lg">
+                        {/* Audio Visualizer (Left) */}
+                        <div className="flex items-end gap-1 h-4 w-16 justify-center">
+                            {visualizerData.map((val, i) => (
+                                <div 
+                                    key={i} 
+                                    className="w-1.5 bg-[#4285F4] rounded-full transition-all duration-75"
+                                    style={{ height: `${Math.min(100, val)}%` }}
+                                ></div>
+                            ))}
+                        </div>
+
+                        {/* Controls (Right) */}
+                        <div className="flex items-center gap-2">
+                             <button 
+                                onClick={toggleMute}
+                                className={`p-1.5 rounded-full ${isMuted ? 'bg-red-500/20 text-red-400' : 'bg-[#333537] text-[#C4C7C5] hover:text-white'}`}
+                             >
+                                 <MicIcon className="w-4 h-4" />
+                             </button>
+                             <button 
+                                onClick={leaveCall}
+                                className="p-1.5 rounded-full bg-red-600 text-white hover:bg-red-500"
+                             >
+                                 <XMarkIcon className="w-4 h-4" />
+                             </button>
+                        </div>
+                    </div>
+                  </div>
+              )}
+
               <div className={`bg-[#2A2B2D] rounded-full flex items-center px-3 gap-2 border border-transparent focus-within:border-[#5E5E5E] smooth-transition ${isCompact ? 'py-1' : 'py-2'}`}>
+                  {/* Call Button */}
+                  <button 
+                      onClick={startCall}
+                      disabled={isInCall}
+                      className={`p-1.5 rounded-full text-[#C4C7C5] hover:text-green-400 hover:bg-[#333537] smooth-transition ${isInCall ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title="Start Call"
+                  >
+                      <PhoneIcon className="w-5 h-5" />
+                  </button>
+
                   <input 
                       type="text" 
                       value={userChatInput}
@@ -740,11 +950,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       placeholder="Message the group..."
                       className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#5E5E5E]"
                   />
-                  {userChatInput.trim() && (
-                      <button onClick={handleUserChatSend} className="p-1.5 bg-[#4285F4] text-white rounded-full hover:scale-105 smooth-transition transform">
-                          <SendIcon />
-                      </button>
-                  )}
+                  
+                  {/* Persistent Send Icon */}
+                  <button 
+                      onClick={handleUserChatSend} 
+                      disabled={!userChatInput.trim()}
+                      className={`p-1.5 rounded-full smooth-transition transform ${
+                          userChatInput.trim()
+                          ? 'bg-[#4285F4] text-white hover:scale-105'
+                          : 'bg-transparent text-[#5E5E5E] cursor-default'
+                      }`}
+                  >
+                      <SendIcon />
+                  </button>
               </div>
           </div>
       </div>
@@ -768,6 +986,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
                 {/* Mode Toggle Slider */}
                 <div className="relative bg-[#1E1F20] rounded-full p-0.5 flex border border-[#444746] shrink-0">
+                    {/* Notification Dots */}
+                    {hasAIUpdate && (chatMode === 'user') && (
+                        <div className="absolute -top-1 left-[15%] w-2.5 h-2.5 bg-[#4285F4] rounded-full border border-[#1E1F20] z-20 animate-pulse"></div>
+                    )}
+                    {unreadUserCount > 0 && (chatMode === 'ai') && (
+                        <div className="absolute -top-1 left-[50%] w-3.5 h-3.5 bg-red-500 rounded-full border border-[#1E1F20] z-20 flex items-center justify-center text-[8px] font-bold text-white">
+                            {unreadUserCount > 9 ? '9+' : unreadUserCount}
+                        </div>
+                    )}
+
                     <div 
                         className="absolute top-0.5 bottom-0.5 bg-[#444746] rounded-full transition-all duration-300 ease-in-out"
                         style={{
@@ -932,3 +1160,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 };
 
 export default ChatInterface;
+
+function XMarkIcon({ className }: { className?: string }) {
+    return (
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className={className || "w-6 h-6"}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+    )
+}

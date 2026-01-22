@@ -1,5 +1,7 @@
 {
   "name": "GemGroupChat",
   "description": "A Gemini-powered group chat application with guest access and real-time capabilities.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }
