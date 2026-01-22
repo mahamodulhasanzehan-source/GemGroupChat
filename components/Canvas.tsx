@@ -11,8 +11,15 @@ interface CanvasProps {
   onCloseMobile?: () => void; // Prop to handle back navigation on mobile
 }
 
+const ReloadIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+    </svg>
+);
+
 const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'terminal'>('preview');
+  const [reloadKey, setReloadKey] = useState(0); // State to force iframe reload
   
   // Refs for scroll sync
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -29,6 +36,10 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
           highlighterRef.current.scrollTop = e.currentTarget.scrollTop;
           highlighterRef.current.scrollLeft = e.currentTarget.scrollLeft;
       }
+  };
+
+  const handleReload = () => {
+      setReloadKey(prev => prev + 1);
   };
 
   const handleExtract = async () => {
@@ -77,8 +88,17 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
       padding: '1rem',
   };
 
+  // Inject a default style block to ensure the iframe background is dark immediately
+  // preventing the white flash before the user's code loads.
+  const getRenderedHtml = () => {
+      const darkStyle = `<style>body { background-color: #131314 !important; color: #E3E3E3; }</style>`;
+      if (!canvasState.html) return '';
+      // Prepend to head if possible, otherwise just prepend to string
+      return darkStyle + canvasState.html;
+  };
+
   return (
-    <div className="flex flex-col h-full bg-[#1E1F20] border-l border-[#444746] w-full">
+    <div className="flex flex-col h-full bg-[#1E1F20] border-l border-[#444746] w-full smooth-transition">
       {/* Tabs */}
       <div className="flex items-center justify-between px-4 pt-2 border-b border-[#444746] bg-[#1E1F20] shrink-0">
         <div className="flex items-center gap-2">
@@ -124,32 +144,44 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
             </button>
         </div>
         
-        {/* Extract Button */}
-        <button 
-            onClick={handleExtract}
-            className="flex items-center gap-1.5 px-3 py-1.5 mb-1 bg-[#1A1A1C] hover:bg-[#333537] border border-[#444746] rounded text-[#E3E3E3] text-xs font-medium transition-colors"
-            title="Save index.html to disk"
-        >
-            <DownloadIcon />
-            <span className="hidden sm:inline">Extract</span>
-        </button>
+        <div className="flex items-center gap-2 mb-1">
+            {activeTab === 'preview' && (
+                <button 
+                    onClick={handleReload}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1A1A1C] hover:bg-[#333537] border border-[#444746] rounded text-[#E3E3E3] text-xs font-medium transition-colors"
+                    title="Reload Preview"
+                >
+                    <ReloadIcon />
+                </button>
+            )}
+            {/* Extract Button */}
+            <button 
+                onClick={handleExtract}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1A1A1C] hover:bg-[#333537] border border-[#444746] rounded text-[#E3E3E3] text-xs font-medium transition-colors"
+                title="Save index.html to disk"
+            >
+                <DownloadIcon />
+                <span className="hidden sm:inline">Extract</span>
+            </button>
+        </div>
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-hidden relative">
+      <div className="flex-1 overflow-hidden relative smooth-transition">
         
         {/* Preview Mode */}
         <div className={`absolute inset-0 w-full h-full bg-white transition-opacity duration-300 ${activeTab === 'preview' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
             {canvasState.html ? (
                 <iframe 
-                    srcDoc={canvasState.html}
+                    key={reloadKey} // Changing this key forces a remount/reload
+                    srcDoc={getRenderedHtml()}
                     title="preview"
                     className="w-full h-full border-none"
                     sandbox="allow-scripts allow-modals"
                     style={{ backgroundColor: '#131314' }}
                 />
             ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                <div className="absolute inset-0 flex items-center justify-center text-gray-400 bg-[#131314]">
                     No code to preview yet. Ask Gemini to create something!
                 </div>
             )}

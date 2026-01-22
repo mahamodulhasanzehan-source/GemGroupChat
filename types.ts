@@ -15,6 +15,7 @@ export interface Message {
   role: 'user' | 'model' | 'system';
   isLoading?: boolean;
   status?: 'queued' | 'generating' | 'done'; // For queue management
+  audioData?: string | null; // Base64 Audio data for persistence
 }
 
 export interface ChatSession {

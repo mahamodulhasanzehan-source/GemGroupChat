@@ -93,39 +93,39 @@ const Sidebar: React.FC<SidebarProps> = ({
   const joinedGroups = myGroups.filter(g => g.createdBy !== currentUser?.uid);
 
   return (
-    <div className={`flex flex-col h-full bg-[#1E1F20] transition-all duration-300 ${isCollapsed ? 'w-[72px]' : 'w-[280px]'} border-r border-[#444746] relative`}>
-      <div className="p-4 flex items-center justify-between">
+    <div className={`flex flex-col h-full bg-[#1E1F20] smooth-transition ${isCollapsed ? 'w-[72px]' : 'w-[280px]'} border-r border-[#444746] relative`}>
+      <div className="p-4 flex items-center justify-between smooth-transition">
         <button 
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors"
+          className="p-2 hover:bg-[#333537] rounded-full text-[#E3E3E3] transition-colors smooth-transition"
         >
           <MenuIcon />
         </button>
       </div>
 
-      <div className="px-3 pb-4 space-y-2">
+      <div className="px-3 pb-4 space-y-2 smooth-transition">
         {/* Create Group - Primary Action */}
         <button 
           onClick={onCreateGroup}
-          className={`flex items-center gap-3 bg-[#1A1A1C] hover:bg-[#282A2C] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-200 border border-[#444746] ${isCollapsed ? 'justify-center px-2' : ''}`}
+          className={`flex items-center gap-3 bg-[#1A1A1C] hover:bg-[#282A2C] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 border border-[#444746] smooth-transition ${isCollapsed ? 'justify-center px-2' : ''}`}
         >
           <PlusIcon />
-          {!isCollapsed && <span className="text-sm font-medium">Create Group</span>}
+          {!isCollapsed && <span className="text-sm font-medium animate-[fadeIn_0.5s_ease-out]">Create Group</span>}
         </button>
 
         {/* Join Group - Secondary Action */}
         <button 
           onClick={onJoinGroup}
-          className={`flex items-center gap-3 hover:bg-[#333537] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-200 ${isCollapsed ? 'justify-center px-2' : ''}`}
+          className={`flex items-center gap-3 hover:bg-[#333537] text-[#E3E3E3] rounded-full px-4 py-3 w-full transition-all duration-500 smooth-transition ${isCollapsed ? 'justify-center px-2' : ''}`}
         >
           <UserGroupIcon />
-          {!isCollapsed && <span className="text-sm font-medium">Join a group</span>}
+          {!isCollapsed && <span className="text-sm font-medium animate-[fadeIn_0.5s_ease-out]">Join a group</span>}
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 space-y-6">
+      <div className="flex-1 overflow-y-auto px-3 space-y-6 smooth-transition">
         {!isCollapsed && (
-             <>
+             <div className="animate-[fadeIn_0.5s_ease-out]">
                 {/* Created By Me */}
                 <div>
                     <h3 className="text-xs font-semibold text-[#C4C7C5] uppercase tracking-wider mb-2 px-2">Created by me</h3>
@@ -137,12 +137,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 <div 
                                     key={group.id}
                                     onClick={() => navigate(`/group/${group.id}`)}
-                                    className="group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors"
+                                    className="group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors smooth-transition"
                                 >
                                     <span className="text-sm text-[#E3E3E3] truncate">{group.name}</span>
                                     <button 
                                         onClick={(e) => handleDeleteGroup(e, group.id)}
-                                        className="opacity-0 group-hover:opacity-100 text-[#C4C7C5] hover:text-red-400 p-1"
+                                        className="opacity-0 group-hover:opacity-100 text-[#C4C7C5] hover:text-red-400 p-1 smooth-transition"
                                     >
                                         <TrashIcon />
                                     </button>
@@ -153,7 +153,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
 
                 {/* Joined Groups */}
-                <div>
+                <div className="mt-6">
                     <h3 className="text-xs font-semibold text-[#C4C7C5] uppercase tracking-wider mb-2 px-2">Joined Groups</h3>
                      {joinedGroups.length === 0 ? (
                         <p className="text-xs text-[#5E5E5E] px-2 italic">No joined groups.</p>
@@ -163,7 +163,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 <div 
                                     key={group.id}
                                     onClick={() => navigate(`/group/${group.id}`)}
-                                    className="group flex items-center px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors"
+                                    className="group flex items-center px-3 py-2 rounded-lg hover:bg-[#333537] cursor-pointer transition-colors smooth-transition"
                                 >
                                     <span className="text-sm text-[#E3E3E3] truncate">{group.name}</span>
                                 </div>
@@ -171,13 +171,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                     )}
                 </div>
-             </>
+             </div>
         )}
       </div>
 
-      <div className="p-3 border-t border-[#444746]">
+      <div className="p-3 border-t border-[#444746] smooth-transition">
         <div 
-            className={`flex items-center gap-2 mt-2 p-2 rounded-lg cursor-pointer hover:bg-[#333537] transition-colors ${isCollapsed ? 'justify-center' : ''}`}
+            className={`flex items-center gap-2 mt-2 p-2 rounded-lg cursor-pointer hover:bg-[#333537] transition-colors smooth-transition ${isCollapsed ? 'justify-center' : ''}`}
             onClick={() => setIsProfileModalOpen(true)}
         >
            {/* User Profile Mini */}
@@ -190,7 +190,7 @@ const Sidebar: React.FC<SidebarProps> = ({
            </div>
            
            {!isCollapsed && (
-             <div className="flex flex-col flex-1 overflow-hidden">
+             <div className="flex flex-col flex-1 overflow-hidden animate-[fadeIn_0.3s_ease-out]">
                 <span className="text-sm text-[#E3E3E3] truncate font-medium" title={currentUser?.displayName}>
                     {currentUser?.displayName || 'Guest User'}
                 </span>
@@ -202,11 +202,11 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       {/* --- Profile Settings Modal --- */}
       {isProfileModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
-              <div className="bg-[#1E1F20] border border-[#444746] rounded-2xl w-full max-w-sm p-6 shadow-2xl relative">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.5s_ease-out]">
+              <div className="bg-[#1E1F20] border border-[#444746] rounded-2xl w-full max-w-sm p-6 shadow-2xl relative smooth-transition">
                   <button 
                       onClick={() => setIsProfileModalOpen(false)}
-                      className="absolute top-4 right-4 text-[#C4C7C5] hover:text-white"
+                      className="absolute top-4 right-4 text-[#C4C7C5] hover:text-white transition-colors"
                   >
                       <XMarkIcon />
                   </button>
@@ -227,7 +227,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                           {/* Custom Avatar Upload Button */}
                           <button 
                              onClick={handleCustomAvatar}
-                             className="absolute bottom-4 right-0 p-1.5 bg-[#4285F4] text-white rounded-full hover:bg-[#3367D6] border border-[#1E1F20] shadow-sm"
+                             className="absolute bottom-4 right-0 p-1.5 bg-[#4285F4] text-white rounded-full hover:bg-[#3367D6] border border-[#1E1F20] shadow-sm smooth-transition hover:scale-110"
                              title="Upload Custom Avatar URL"
                           >
                              <PencilIcon className="w-3 h-3" />
@@ -261,7 +261,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                               <button 
                                 key={i}
                                 onClick={() => handleAvatarSelect(url)}
-                                className={`w-8 h-8 rounded-full overflow-hidden border-2 transition-all ${currentUser?.photoURL === url ? 'border-[#4285F4] scale-110' : 'border-transparent hover:border-[#444746]'}`}
+                                className={`w-8 h-8 rounded-full overflow-hidden border-2 transition-all duration-300 ${currentUser?.photoURL === url ? 'border-[#4285F4] scale-110' : 'border-transparent hover:border-[#444746]'}`}
                               >
                                   <img src={url} alt={`Avatar ${i}`} className="w-full h-full object-cover" />
                               </button>
@@ -280,7 +280,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             <select 
                                 value={aiVoice}
                                 onChange={(e) => setAiVoice && setAiVoice(e.target.value)}
-                                className="w-full bg-[#131314] text-[#E3E3E3] border border-[#444746] rounded-lg px-3 py-2 text-sm appearance-none outline-none focus:border-[#4285F4]"
+                                className="w-full bg-[#131314] text-[#E3E3E3] border border-[#444746] rounded-lg px-3 py-2 text-sm appearance-none outline-none focus:border-[#4285F4] transition-colors"
                             >
                                 {AI_VOICES.map(voice => (
                                     <option key={voice} value={voice}>{voice}</option>
@@ -326,12 +326,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                                   Log Out
                               </button>
                           ) : (
-                              <div className="bg-[#2A0000] border border-red-900/50 rounded-lg p-3 text-center animate-[fadeIn_0.2s_ease-out]">
+                              <div className="bg-[#2A0000] border border-red-900/50 rounded-lg p-3 text-center animate-[fadeIn_0.3s_ease-out]">
                                   <p className="text-xs text-red-200 mb-3">Are you sure you want to log out?</p>
                                   <div className="flex gap-2">
                                       <button 
                                           onClick={() => setShowLogoutConfirm(false)}
-                                          className="flex-1 py-1.5 rounded bg-[#333537] text-[#C4C7C5] text-xs hover:bg-[#444746]"
+                                          className="flex-1 py-1.5 rounded bg-[#333537] text-[#C4C7C5] text-xs hover:bg-[#444746] transition-colors"
                                       >
                                           No
                                       </button>
@@ -341,7 +341,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                               setIsProfileModalOpen(false);
                                               navigate('/login');
                                           }}
-                                          className="flex-1 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-500"
+                                          className="flex-1 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-500 transition-colors"
                                       >
                                           Yes
                                       </button>

@@ -102,7 +102,8 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // --- Audio Utilities ---
 
 // Convert Base64 PCM to WAV Blob URL
-const base64ToWav = (base64Data: string, sampleRate = 24000) => {
+// Exported so ChatInterface can use it with stored base64 data
+export const base64ToWav = (base64Data: string, sampleRate = 24000) => {
     const binaryString = atob(base64Data);
     const len = binaryString.length;
     const bytes = new Uint8Array(len);
@@ -332,8 +333,8 @@ export const generateSpeech = async (text: string, voiceName: string = 'Charon')
                 updateTokenUsage(SPEECH_KEY_INDEX, usage.totalTokenCount);
             }
             
-            // Convert to WAV immediately for playback
-            return base64ToWav(base64Audio);
+            // Return raw base64 data to store in Firebase
+            return base64Audio;
         }
 
     } catch (e: any) {

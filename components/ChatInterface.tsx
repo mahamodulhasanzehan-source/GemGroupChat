@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon } from './Icons';
 import { Message, CanvasState, Presence, Group } from '../types';
-import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS } from '../services/geminiService';
+import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS, base64ToWav } from '../services/geminiService';
 import { 
     subscribeToMessages, sendMessage, updateMessage, deleteMessage,
     subscribeToGroupDetails, subscribeToTokenUsage, updateGroup,
@@ -132,7 +132,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }, [groupId, currentUser]);
 
   // Audio Player Logic
-  const handlePlayAudio = async (msgId: string, text: string) => {
+  const handlePlayAudio = async (msg: Message) => {
+      const msgId = msg.id;
+
       // 1. If playing this message, stop it.
       if (playingMessageId === msgId) {
           if (audioRef.current) {
@@ -149,16 +151,31 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           setPlayingMessageId(null);
       }
 
-      // 3. Check Cache
+      // 3. Check Cache or Stored Data
       const cacheKey = `${msgId}_${aiVoice}`;
       let url = audioCache[cacheKey];
 
-      // 4. If not in cache, generate it now (On-Demand)
+      // If we don't have a local cache but we have stored audio data from Firebase, use that
+      if (!url && msg.audioData) {
+          try {
+             url = base64ToWav(msg.audioData);
+             setAudioCache(prev => ({ ...prev, [cacheKey]: url }));
+          } catch(e) {
+             console.error("Failed to decode stored audio", e);
+          }
+      }
+
+      // 4. If still not found, generate it now (On-Demand)
       if (!url) {
           setGeneratingAudioIds(prev => new Set(prev).add(msgId));
           try {
-              url = await generateSpeech(text, aiVoice) || '';
-              if (url) {
+              const base64 = await generateSpeech(msg.text, aiVoice) || '';
+              if (base64) {
+                  // Persist to Firebase so others can hear it too
+                  if (groupId) {
+                      await updateMessage(groupId, msgId, { audioData: base64 });
+                  }
+                  url = base64ToWav(base64);
                   setAudioCache(prev => ({ ...prev, [cacheKey]: url }));
               }
           } finally {
@@ -288,7 +305,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           let lastMessageUpdateTime = 0;
           let lastCanvasUpdateTime = 0;
           const MESSAGE_THROTTLE = 150; // Fast chat updates
-          const CANVAS_THROTTLE = 600;  // Slower canvas updates to prevent firestore spam
+          // Increased throttle to reduce flicker when code is rapidly changing
+          const CANVAS_THROTTLE = 800;  
 
           await streamGeminiResponse(
               userMsg.text,
@@ -340,18 +358,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           await updateGroup(groupId, { processingMessageId: null });
 
           // --- TRIGGER BACKGROUND SPEECH GENERATION ---
-          // This runs after text generation is complete to avoid context switching too much
-          // Uses Key 5 exclusively.
           console.log("Generating Audio in background...");
           // Pre-set generating status so UI shows spinner immediately
           setGeneratingAudioIds(prev => new Set(prev).add(modelMsgId));
           try {
             // Pass the current selected voice
-            const audioUrl = await generateSpeech(accumulatedText, aiVoice);
-            if (audioUrl) {
-                // Cache with voice key
+            const base64 = await generateSpeech(accumulatedText, aiVoice);
+            if (base64) {
+                // SAVE Base64 to Firestore so all users have it
+                await updateMessage(groupId, modelMsgId, { audioData: base64 });
+                
+                const url = base64ToWav(base64);
+                // Cache locally
                 const cacheKey = `${modelMsgId}_${aiVoice}`;
-                setAudioCache(prev => ({ ...prev, [cacheKey]: audioUrl }));
+                setAudioCache(prev => ({ ...prev, [cacheKey]: url }));
             }
           } finally {
             setGeneratingAudioIds(prev => {
@@ -471,10 +491,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   });
 
   return (
-    <div className="flex h-full bg-[#131314] overflow-hidden">
+    <div className="flex h-full bg-[#131314] overflow-hidden smooth-transition">
         
       {/* Left Panel */}
-      <div className={`flex flex-col border-r border-[#444746] transition-all duration-300 
+      <div className={`flex flex-col border-r border-[#444746] smooth-transition
             ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'} 
             ${isCanvasCollapsed ? 'md:w-full max-w-4xl mx-auto md:border-r-0' : 'md:w-[35%] md:min-w-[350px]'}
       `}>
@@ -489,17 +509,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <div className="relative">
                     <button 
                         onClick={() => setShowOnlineUsers(!showOnlineUsers)}
-                        className="flex items-center gap-1 text-xs text-[#C4C7C5] hover:text-white bg-[#1E1F20] px-2 py-1 rounded-full border border-[#444746]"
+                        className="flex items-center gap-1 text-xs text-[#C4C7C5] hover:text-white bg-[#1E1F20] px-2 py-1 rounded-full border border-[#444746] smooth-transition"
                     >
                         <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                         {onlineUsers.length} Online
                         <ChevronDownIcon />
                     </button>
                     {showOnlineUsers && (
-                        <div className="absolute top-full left-0 mt-2 w-48 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden">
+                        <div className="absolute top-full left-0 mt-2 w-48 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
                             <div className="max-h-40 overflow-y-auto">
                                 {onlineUsers.map(u => (
-                                    <div key={u.uid} className="px-3 py-2 text-xs text-[#C4C7C5] flex items-center gap-2 hover:bg-[#333537]">
+                                    <div key={u.uid} className="px-3 py-2 text-xs text-[#C4C7C5] flex items-center gap-2 hover:bg-[#333537] smooth-transition">
                                         <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
                                         {u.displayName}
                                     </div>
@@ -515,7 +535,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                  <div className="relative hidden md:block">
                      <button 
                         onClick={() => setShowKeyDropdown(!showKeyDropdown)}
-                        className={`flex items-center gap-2 text-xs font-mono border border-[#444746] rounded overflow-hidden shadow-sm hover:border-[#5E5E5E] transition-colors
+                        className={`flex items-center gap-2 text-xs font-mono border border-[#444746] rounded overflow-hidden shadow-sm hover:border-[#5E5E5E] smooth-transition
                             ${keyStatus.rateLimited.includes(keyStatus.currentIndex) ? 'bg-yellow-900/20 border-yellow-700/50' : 'bg-[#1E1F20]'}
                         `}
                      >
@@ -529,14 +549,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </button>
 
                     {showKeyDropdown && (
-                        <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden">
+                        <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl z-50 overflow-hidden smooth-transition animate-[fadeIn_0.2s_ease-out]">
                             <div className="py-1">
                                 <div className="px-3 py-1 text-[10px] text-[#5E5E5E] uppercase font-bold tracking-wider bg-[#1A1A1C]">Text Generation</div>
                                 {keyList.filter(k => !k.isTTS).map((k) => (
                                     <button
                                         key={k.index}
                                         onClick={() => handleKeySelect(k.index)}
-                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] transition-colors
+                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] smooth-transition
                                             ${k.isActive ? 'bg-[#333537/50]' : ''}
                                             ${k.isRateLimited ? 'text-yellow-500' : 'text-[#C4C7C5]'}
                                         `}
@@ -554,7 +574,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 {keyList.filter(k => k.isTTS).map((k) => (
                                     <div
                                         key={k.index}
-                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] transition-colors cursor-default text-[#A8C7FA]`}
+                                        className={`w-full px-3 py-2 text-xs flex items-center justify-between hover:bg-[#333537] smooth-transition cursor-default text-[#A8C7FA]`}
                                     >
                                         <div className="flex items-center gap-2">
                                             <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
@@ -581,7 +601,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 {isCanvasCollapsed && setIsCanvasCollapsed && (
                     <button 
                         onClick={() => setIsCanvasCollapsed(false)}
-                        className="hidden md:flex p-1.5 hover:bg-[#333537] text-[#E3E3E3] rounded-md border border-[#444746]"
+                        className="hidden md:flex p-1.5 hover:bg-[#333537] text-[#E3E3E3] rounded-md border border-[#444746] smooth-transition"
                         title="Open Canvas"
                     >
                         <ChevronDownIcon /> 
@@ -614,7 +634,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 return (
                     <div 
                         key={msg.id} 
-                        className={`group relative flex gap-3 ${isUserRole ? 'flex-row-reverse' : 'flex-row'} animate-[fadeIn_0.3s_ease-out]`}
+                        className={`group relative flex gap-3 ${isUserRole ? 'flex-row-reverse' : 'flex-row'} smooth-transition animate-[fadeIn_0.5s_ease-out]`}
                         onMouseEnter={() => setHoveredMessageId(msg.id)}
                         onMouseLeave={() => setHoveredMessageId(null)}
                     >
@@ -629,7 +649,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <div className={`flex flex-col max-w-[90%] ${isUserRole ? 'items-end' : 'items-start'}`}>
                             {/* Message Bubble */}
                             <div className={`
-                                prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm
+                                prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm smooth-transition
                                 ${isUserRole ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}
                                 ${isQueued ? 'opacity-50 border border-dashed border-[#444746]' : ''}
                             `}>
@@ -664,9 +684,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {/* Audio Player Button (Visible for all completed AI messages) */}
                             {showAudioButton && (
                                 <button
-                                    onClick={() => handlePlayAudio(msg.id, msg.text)}
+                                    onClick={() => handlePlayAudio(msg)}
                                     disabled={isGeneratingAudio}
-                                    className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border transition-colors
+                                    className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border smooth-transition
                                         ${isPlaying 
                                             ? 'bg-[#4285F4] text-white border-[#4285F4]' 
                                             : 'bg-[#1E1F20] text-[#C4C7C5] border-[#444746] hover:text-white'}
@@ -687,7 +707,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         </div>
 
                         {!isGemini && hoveredMessageId === msg.id && (
-                            <div className={`flex items-center opacity-0 group-hover:opacity-100 transition-opacity self-center ${isUserRole ? 'mr-1' : 'ml-1'}`}>
+                            <div className={`flex items-center opacity-0 group-hover:opacity-100 smooth-transition self-center ${isUserRole ? 'mr-1' : 'ml-1'}`}>
                                 <div className="relative group/menu">
                                     <button className="p-1 text-[#C4C7C5] hover:text-white hover:bg-[#333537] rounded">
                                         <DotsHorizontalIcon />
@@ -720,7 +740,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         {/* Status Bar - Shows when ANYONE is queued or processing */}
         {(queuedMessages.length > 0 || isSystemBusy) && (
-             <div className="bg-[#1A1A1C] border-t border-[#444746] px-4 py-2 flex items-center justify-between z-30">
+             <div className="bg-[#1A1A1C] border-t border-[#444746] px-4 py-2 flex items-center justify-between z-30 smooth-transition">
                  <div className="flex items-center gap-2 text-xs">
                     {isSystemBusy ? (
                          <>
@@ -754,7 +774,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <button onClick={() => { setEditingMessageId(null); setInput(''); setGroupLock(groupId!, null); }} className="hover:underline">Cancel</button>
                 </div>
             )}
-            <div className={`bg-[#1E1F20] rounded-full flex items-center px-3 py-2 gap-2 border transition-all ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}`}>
+            <div className={`bg-[#1E1F20] rounded-full flex items-center px-3 py-2 gap-2 border smooth-transition ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}`}>
                 <input 
                     type="text" 
                     value={input}
@@ -767,14 +787,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 {isSystemBusy && !input.trim() ? (
                     <button 
                         onClick={handleStop} 
-                        className="p-1.5 bg-[#E3E3E3] text-black rounded-full hover:bg-white hover:scale-105 transition-transform"
+                        className="p-1.5 bg-[#E3E3E3] text-black rounded-full hover:bg-white hover:scale-105 smooth-transition transform"
                         title="Stop Generating (Accessible by everyone)"
                     >
                         <StopIcon />
                     </button>
                 ) : (
                     (input.trim() || editingMessageId) && (
-                        <button onClick={handleSend} className="p-1.5 bg-[#A8C7FA] text-[#000] rounded-full hover:scale-105 transition-transform">
+                        <button onClick={handleSend} className="p-1.5 bg-[#A8C7FA] text-[#000] rounded-full hover:scale-105 smooth-transition transform">
                             <SendIcon />
                         </button>
                     )
@@ -785,13 +805,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       {/* Right Panel */}
       {!isCanvasCollapsed && (
-          <div className={`flex-1 h-full flex flex-col min-w-0 
-              ${mobileView === 'chat' ? 'hidden md:flex' : 'flex w-full'}`
+          <div className={`flex-1 h-full flex flex-col min-w-0 smooth-transition
+              ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'}`
           }>
              <div className="h-8 bg-[#1E1F20] border-b border-[#444746] flex items-center justify-end px-2">
                  <button 
                     onClick={() => setIsCanvasCollapsed && setIsCanvasCollapsed(true)}
-                    className="hidden md:block p-1 hover:bg-[#333537] text-[#C4C7C5] rounded"
+                    className="hidden md:block p-1 hover:bg-[#333537] text-[#C4C7C5] rounded smooth-transition"
                     title="Collapse Canvas"
                  >
                      <ChevronRightIcon />
