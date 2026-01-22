@@ -1,12 +1,27 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { signInWithGoogle, signInGuest } from '../services/firebase';
 import { SparklesIcon } from '../components/Icons';
 
 const LoginPage = () => {
+  const [error, setError] = useState<string | null>(null);
 
   const handleGoogleClick = async () => {
-      // Direct call to Firebase Service
-      await signInWithGoogle();
+      setError(null);
+      try {
+          await signInWithGoogle();
+          // Navigation handles automatically via App.tsx auth listener
+      } catch (err: any) {
+          console.error("Login Error:", err);
+          if (err.code === 'auth/popup-blocked') {
+              setError("⚠️ Popup blocked. Please allow popups for this site in your browser address bar and try again.");
+          } else if (err.code === 'auth/popup-closed-by-user') {
+              setError("Sign-in cancelled.");
+          } else if (err.code === 'auth/cancelled-popup-request') {
+              // Ignore conflict errors
+          } else {
+              setError(err.message || "Sign-in failed. Please try again or use Guest mode.");
+          }
+      }
   };
 
   return (
@@ -16,13 +31,19 @@ const LoginPage = () => {
 
         <div className="z-10 flex flex-col items-center max-w-sm w-full p-6 text-center space-y-8 animate-[fadeIn_0.8s_ease-out]">
             <div className="w-16 h-16 bg-[#1E1F20] rounded-2xl flex items-center justify-center shadow-lg border border-[#444746]">
-                <SparklesIcon />
+                <SparklesIcon className="w-8 h-8" />
             </div>
 
             <div>
                 <h1 className="text-3xl font-semibold text-[#E3E3E3] mb-2">Welcome to GemGroupChat</h1>
                 <p className="text-[#C4C7C5]">Collaborate with Gemini AI alone or in groups.</p>
             </div>
+
+            {error && (
+                <div className="w-full bg-red-900/20 border border-red-500/50 rounded-lg p-3 text-xs text-red-200 text-left">
+                    {error}
+                </div>
+            )}
 
             <div className="w-full space-y-4">
                 <button 

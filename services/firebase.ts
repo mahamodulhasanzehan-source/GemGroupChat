@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch, limit } from 'firebase/firestore';
 
 // Hardcoded Configuration provided by user
@@ -45,16 +45,6 @@ try {
     db = getFirestore(app);
     googleProvider = new GoogleAuthProvider();
     isConfigured = true;
-    
-    // Handle Redirect Result on App Init
-    getRedirectResult(auth).then((result) => {
-        if (result) {
-            console.log("Redirect Sign-In Successful", result.user);
-        }
-    }).catch((error) => {
-        console.error("Redirect Sign-In Failed", error);
-    });
-
 } catch (error) {
   console.error("Failed to initialize Firebase:", error);
 }
@@ -93,22 +83,19 @@ export const subscribeToAuth = (callback: (user: any) => void) => {
 export const signInWithGoogle = async () => {
   if (!isConfigured || !auth) {
     alert("Firebase is not initialized. Please check the hardcoded configuration.");
-    return false;
+    throw new Error("Firebase not initialized");
   }
   try {
-    // Use signInWithRedirect to avoid popup blockers
-    await signInWithRedirect(auth, googleProvider);
-    // The promise won't resolve here usually because the page redirects.
-    // The result is handled in getRedirectResult at initialization.
-    return true;
+    // Using signInWithPopup is more reliable for 3rd party previews than Redirect
+    // but may be blocked by browsers. UI handles the "popup-blocked" error.
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
   } catch (error: any) {
     console.error("Error initiating Google Sign-In", error);
     if (error.code === 'auth/unauthorized-domain') {
         alert("Domain Error: This domain is not authorized in Firebase Console.");
-    } else {
-        alert(`Google Sign-In failed: ${error.message}`);
     }
-    return false;
+    throw error; // Propagate to UI
   }
 };
 
