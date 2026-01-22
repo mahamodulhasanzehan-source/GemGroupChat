@@ -177,7 +177,7 @@ const Canvas: React.FC<CanvasProps> = ({ canvasState, groupId, onCloseMobile }) 
                     srcDoc={getRenderedHtml()}
                     title="preview"
                     className="w-full h-full border-none"
-                    sandbox="allow-scripts allow-modals"
+                    sandbox="allow-scripts allow-modals allow-same-origin allow-forms allow-popups"
                     style={{ backgroundColor: '#131314' }}
                 />
             ) : (

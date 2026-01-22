@@ -194,9 +194,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       };
   }, [groupId, currentUser]);
 
-  // New Effect: Watch for Call Termination
-  // This ensures that if the call is ended remotely (isCallActive becomes false),
-  // and we are locally in the call (isInCall is true), we correctly leave.
+  // --- WebRTC Audio Logic (PeerJS) ---
+  // Fix: Monitor remote call ending
   useEffect(() => {
       if (groupDetails && groupDetails.isCallActive === false && isInCall) {
           console.log("Call ended remotely, leaving...");
@@ -205,12 +204,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
   }, [groupDetails?.isCallActive, isInCall]);
 
-
-  // --- WebRTC Audio Logic (PeerJS) ---
-
-  const startCall = async () => {
+  const handleCallAction = async () => {
       if (!groupId) return;
-      if (confirm("Do you want to execute the call?")) {
+      
+      // If call is active, JOIN it instead of restarting it
+      if (groupDetails?.isCallActive) {
+          await joinCall();
+          return;
+      }
+
+      // Start new call
+      if (confirm("Start a group call?")) {
           // Initialize call state in Firestore
           await setGroupCallState(groupId, true, currentUser.uid);
           joinCall();
@@ -222,15 +226,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       try {
           // 1. Get Local Stream with optimized latency constraints
-          const stream = await navigator.mediaDevices.getUserMedia({ 
+          // Fix: Type casting to any to support 'latency' constraint which might not be in standard types yet
+          const constraints: any = {
               audio: { 
                   echoCancellation: true,
                   noiseSuppression: true,
                   autoGainControl: true,
-                  channelCount: 1, // Mono is usually faster for VoIP
-                  latency: 0 // Request lowest possible latency
-              } as any
-          });
+                  channelCount: 1, // Mono is faster
+                  latency: 0, // Lowest latency hint
+                  sampleRate: 48000 // Standard
+              }
+          };
+
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
           localStreamRef.current = stream;
           setIsMuted(false);
 
@@ -295,7 +303,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const setupAudioMixing = (localStream: MediaStream) => {
       // Use 'interactive' latency hint for lowest possible audio processing delay
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
+      const audioCtx = new AudioContextClass({ latencyHint: 'interactive', sampleRate: 48000 });
       
       audioContextRef.current = audioCtx;
       const analyser = audioCtx.createAnalyser();
@@ -1061,12 +1069,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               ))}
 
               <div className={`bg-[#2A2B2D] rounded-full flex items-center px-3 gap-2 border border-transparent focus-within:border-[#5E5E5E] smooth-transition ${isCompact ? 'py-1' : 'py-2'}`}>
-                  {/* Call Button */}
+                  {/* Call Button - Changed Logic to Join if call active */}
                   <button 
-                      onClick={startCall}
+                      onClick={handleCallAction}
                       disabled={isInCall}
-                      className={`p-1.5 rounded-full text-[#C4C7C5] hover:text-green-400 hover:bg-[#333537] smooth-transition ${isInCall ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      title="Start Call"
+                      className={`p-1.5 rounded-full smooth-transition ${
+                          isInCall ? 'opacity-50 cursor-not-allowed text-[#C4C7C5]' : 
+                          groupDetails?.isCallActive ? 'bg-green-600 text-white hover:bg-green-500' : 
+                          'text-[#C4C7C5] hover:text-green-400 hover:bg-[#333537]'
+                      }`}
+                      title={groupDetails?.isCallActive ? "Join Call" : "Start Call"}
                   >
                       <PhoneIcon className="w-5 h-5" />
                   </button>
