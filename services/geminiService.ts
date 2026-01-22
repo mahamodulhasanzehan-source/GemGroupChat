@@ -1,37 +1,41 @@
+
 import { GoogleGenAI, Modality } from "@google/genai";
 import { GEMINI_MODEL, GEMINI_TTS_MODEL } from "../constants";
 import { updateTokenUsage } from "./firebase";
 import { CanvasState } from "../types";
 
-// 1. Define Keys Array
-// Keys 0-3 are for Text/Code. Key 4 is exclusively for TTS.
-const API_KEYS = [
-  process.env.GEMINI_API_KEY_1,
-  process.env.GEMINI_API_KEY_2,
-  process.env.GEMINI_API_KEY_3,
-  process.env.GEMINI_API_KEY_4,
-  process.env.GEMINI_API_KEY_5,
-  process.env.API_KEY // Fallback
-].filter(Boolean) as string[];
+// --- Key Configuration ---
 
-export const TOTAL_KEYS = API_KEYS.length;
-const TEXT_KEYS_COUNT = 4; // First 4 keys for text
-const SPEECH_KEY_INDEX = 4; // 5th key (index 4) for TTS
+// We define a fixed map of 5 keys to ensure the UI always shows 5 slots.
+// Keys 0-3 (Indices 0-3) are for Text/Code Generation.
+// Key 4 (Index 4) is EXCLUSIVELY for Speech (TTS).
+const KEY_MAP: Record<number, string | undefined> = {
+    0: process.env.GEMINI_API_KEY_1 || process.env.API_KEY, // Fallback to generic key for slot 1
+    1: process.env.GEMINI_API_KEY_2,
+    2: process.env.GEMINI_API_KEY_3,
+    3: process.env.GEMINI_API_KEY_4,
+    4: process.env.GEMINI_API_KEY_5 // Exclusive TTS Key
+};
 
-// 2. State
-let currentKeyIndex = 0; // Only cycles 0-3
-let aiClient: GoogleGenAI | null = null;
-let activeKey: string | null = null;
+export const TOTAL_KEYS = 5;
+const TEXT_KEYS_INDICES = [0, 1, 2, 3];
+const SPEECH_KEY_INDEX = 4;
+const TEXT_KEYS_COUNT = TEXT_KEYS_INDICES.length;
 
-// Track Rate Limited Keys (Yellow status)
+// --- State ---
+
+let currentTextKeyIndex = 0; 
+let activeTextClient: GoogleGenAI | null = null;
+let activeTextKey: string | null = null;
+
+// Track Rate Limited Keys
 const rateLimitedKeys = new Set<number>();
 
-// Subscription for UI
 const keyStatusListeners: ((status: { currentIndex: number, rateLimited: number[] }) => void)[] = [];
 
 const notifyListeners = () => {
     const status = {
-        currentIndex: currentKeyIndex,
+        currentIndex: currentTextKeyIndex,
         rateLimited: Array.from(rateLimitedKeys)
     };
     keyStatusListeners.forEach(cb => cb(status));
@@ -39,9 +43,8 @@ const notifyListeners = () => {
 
 export const subscribeToKeyStatus = (callback: (status: { currentIndex: number, rateLimited: number[] }) => void) => {
     keyStatusListeners.push(callback);
-    // Send initial state
     callback({
-        currentIndex: currentKeyIndex,
+        currentIndex: currentTextKeyIndex,
         rateLimited: Array.from(rateLimitedKeys)
     });
     return () => {
@@ -51,58 +54,73 @@ export const subscribeToKeyStatus = (callback: (status: { currentIndex: number, 
 };
 
 export const setManualKey = (index: number) => {
-    // Allow selecting Key 5 manually for visualization, but logic mostly respects TEXT/SPEECH split
-    if (index >= 0 && index < API_KEYS.length) {
-        currentKeyIndex = index;
-        aiClient = null; // Force client recreate
-        activeKey = null;
+    if (index >= 0 && index < TOTAL_KEYS) {
+        // If user selects the Speech key manually, we don't really switch the text client to it
+        // unless we want to allow text generation on the speech key (not recommended by prompt, but useful for debugging).
+        // For now, strictly update the UI index.
+        currentTextKeyIndex = index;
+        activeTextClient = null;
+        activeTextKey = null;
         console.log(`[Gemini Service] Manually set to Key ${index + 1}`);
         notifyListeners();
     }
 };
 
-// Helper to get or create client with current key (For Text)
-const getClient = (): GoogleGenAI => {
-  // Ensure we are using one of the text keys (unless manually overridden to 4)
-  const keyIndexToUse = currentKeyIndex < TEXT_KEYS_COUNT ? currentKeyIndex : currentKeyIndex;
-  const keyToUse = API_KEYS[keyIndexToUse];
-  
-  if (!keyToUse) {
-    throw new Error("No API keys found in configuration.");
-  }
+// --- Client Factory ---
 
-  if (!aiClient || activeKey !== keyToUse) {
-    aiClient = new GoogleGenAI({ apiKey: keyToUse });
-    activeKey = keyToUse;
-  }
-  return aiClient;
+const getTextClient = (): GoogleGenAI => {
+    // If the current index points to a missing key, or the Speech key (if selected manually for text), 
+    // try to find a valid text key.
+    
+    let keyToUse = KEY_MAP[currentTextKeyIndex];
+
+    // If current key is missing, rotate to find one
+    if (!keyToUse) {
+        // Find first available text key
+        const availableIndex = TEXT_KEYS_INDICES.find(i => !!KEY_MAP[i]);
+        if (availableIndex !== undefined) {
+            currentTextKeyIndex = availableIndex;
+            keyToUse = KEY_MAP[availableIndex];
+        } else {
+            throw new Error("No Text API keys found. Please configure GEMINI_API_KEY_1.");
+        }
+    }
+
+    if (!activeTextClient || activeTextKey !== keyToUse) {
+        activeTextClient = new GoogleGenAI({ apiKey: keyToUse! });
+        activeTextKey = keyToUse!;
+    }
+    return activeTextClient!;
 };
 
-// Helper for Speech Client (Always uses Key 5)
 const getSpeechClient = (): GoogleGenAI => {
-    const speechKey = API_KEYS[SPEECH_KEY_INDEX];
+    const speechKey = KEY_MAP[SPEECH_KEY_INDEX];
     if (!speechKey) {
-        throw new Error("Speech Key (Key 5) is missing.");
+        console.error("Speech Key (Key 5) is missing in environment variables.");
+        throw new Error("Speech Key (GEMINI_API_KEY_5) is missing.");
     }
     return new GoogleGenAI({ apiKey: speechKey });
-}
+};
 
-const switchToNextKey = () => {
-    // Only cycle through the first 4 keys (0, 1, 2, 3)
-    currentKeyIndex = (currentKeyIndex + 1) % TEXT_KEYS_COUNT;
-    aiClient = null;
-    activeKey = null;
-    console.warn(`[Gemini Service] Switching to Key ${currentKeyIndex + 1}`);
+const rotateTextKey = () => {
+    // Find next index in TEXT_KEYS_INDICES that wraps around
+    const currentPos = TEXT_KEYS_INDICES.indexOf(currentTextKeyIndex);
+    let nextPos = (currentPos + 1) % TEXT_KEYS_INDICES.length;
+    
+    // Simple rotation
+    currentTextKeyIndex = TEXT_KEYS_INDICES[nextPos];
+    
+    // Reset client
+    activeTextClient = null;
+    activeTextKey = null;
+    console.warn(`[Gemini Service] Rotating to Key ${currentTextKeyIndex + 1}`);
     notifyListeners();
 };
 
-// Delay helper
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- Audio Utilities ---
+// --- Audio Utils ---
 
-// Convert Base64 PCM to WAV Blob URL
-// Exported so ChatInterface can use it with stored base64 data
 export const base64ToWav = (base64Data: string, sampleRate = 24000) => {
     const binaryString = atob(base64Data);
     const len = binaryString.length;
@@ -110,30 +128,21 @@ export const base64ToWav = (base64Data: string, sampleRate = 24000) => {
     for (let i = 0; i < len; i++) {
         bytes[i] = binaryString.charCodeAt(i);
     }
-    
-    // Gemini returns Int16 PCM usually. Let's assume 1 channel, 16-bit.
     const wavHeader = new ArrayBuffer(44);
     const view = new DataView(wavHeader);
-    
-    // RIFF chunk descriptor
     writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + len, true); // File size
+    view.setUint32(4, 36 + len, true);
     writeString(view, 8, 'WAVE');
-    
-    // fmt sub-chunk
     writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
-    view.setUint16(20, 1, true); // AudioFormat (1 for PCM)
-    view.setUint16(22, 1, true); // NumChannels (1 for Mono)
-    view.setUint32(24, sampleRate, true); // SampleRate
-    view.setUint32(28, sampleRate * 2, true); // ByteRate (SampleRate * NumChannels * BitsPerSample/8)
-    view.setUint16(32, 2, true); // BlockAlign (NumChannels * BitsPerSample/8)
-    view.setUint16(34, 16, true); // BitsPerSample
-    
-    // data sub-chunk
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
     writeString(view, 36, 'data');
     view.setUint32(40, len, true);
-    
     const blob = new Blob([view, bytes], { type: 'audio/wav' });
     return URL.createObjectURL(blob);
 };
@@ -144,7 +153,7 @@ const writeString = (view: DataView, offset: number, string: string) => {
     }
 };
 
-// --- Text Generation ---
+// --- Generation ---
 
 export const streamGeminiResponse = async (
   prompt: string, 
@@ -153,34 +162,33 @@ export const streamGeminiResponse = async (
   onChunk: (text: string) => void,
   signal?: AbortSignal
 ) => {
-  if (API_KEYS.length === 0) {
-      onChunk(`⚠️ **Configuration Error**: No \`GEMINI_API_KEY_x\` found in Environment Variables.`);
-      return;
-  }
-
   let attempts = 0;
-  // Limit max attempts to the number of TEXT keys
   const maxAttempts = TEXT_KEYS_COUNT; 
   let success = false;
 
+  // Enhanced System Instruction for better Coding Performance
   const systemInstruction = `
-  You are an expert full-stack web developer and coding assistant.
+  You are an expert Senior Full-Stack Web Developer and Solutions Architect.
+  You are running inside a collaborative AI canvas environment.
+
+  **CRITICAL CODING GUIDELINES:**
+  1. **Single File Output**: You MUST output the entire application in a SINGLE HTML code block.
+  2. **Structure**: 
+     - \`<html>\`
+     - \`<head>\` with \`<style>\` for CSS (Use Tailwind CDN or standard CSS).
+     - \`<body>\` with layout and content.
+     - \`<script>\` at the end of body for JavaScript.
+  3. **Quality**: Write clean, modern, semantic, and accessible code. Use Tailwind CSS for styling when possible for speed and aesthetics.
+  4. **Robustness**: Handle potential errors gracefully in your JS.
+  5. **Completeness**: Do not leave placeholders like "// ... rest of code". Write the FULL code every time you update the canvas.
   
-  CONTEXT:
-  You have access to a "Canvas" environment that renders a SINGLE HTML file.
-  
-  CURRENT CANVAS STATE (HTML):
+  **CURRENT CANVAS STATE (HTML):**
   \`\`\`html
-  ${canvasState?.html || '<!-- Empty -->'}
+  ${canvasState?.html || '<!-- Empty Canvas -->'}
   \`\`\`
 
-  INSTRUCTIONS:
-  1. Write the COMPLETE functional application in a SINGLE \`html\` code block.
-  2. You MUST include your CSS inside \`<style>\` tags within the \`<head>\`.
-  3. You MUST include your JavaScript inside \`<script>\` tags within the \`<body>\`.
-  4. DO NOT output separate \`css\` or \`javascript\` blocks. Everything must be in one \`html\` file.
-  5. If updating existing code, you can output just the parts that change if you are clever, but usually outputting the full updated HTML block is safer to ensure consistency in this single-file mode.
-  6. Ensure the code is self-contained (no external local file references, use CDNs if needed).
+  **USER REQUEST:**
+  ${prompt}
   `;
 
   const historyContents = history.map(h => ({
@@ -188,19 +196,13 @@ export const streamGeminiResponse = async (
     parts: [{ text: h.text }]
   }));
   
-  const fullContents = [...historyContents, { role: 'user', parts: [{ text: systemInstruction + "\n\nUser Prompt: " + prompt }] }];
+  const fullContents = [...historyContents, { role: 'user', parts: [{ text: systemInstruction }] }];
 
-  // RETRY LOOP
   while (attempts < maxAttempts && !success) {
     if (signal?.aborted) throw new Error("Aborted by user");
 
     try {
-      // Ensure we are looking at a text key
-      if (currentKeyIndex >= TEXT_KEYS_COUNT) {
-          currentKeyIndex = 0; // Reset to first text key if we wandered
-      }
-      
-      const ai = getClient();
+      const ai = getTextClient(); // Gets client for currentTextKeyIndex
       
       let inputTokens = 0;
       try {
@@ -217,7 +219,12 @@ export const streamGeminiResponse = async (
           role: h.role,
           parts: [{ text: h.text }]
         })),
-        config: { systemInstruction }
+        config: { 
+            systemInstruction: systemInstruction,
+            temperature: 0.7, // Balanced creativity and precision for code
+            topK: 40,
+            topP: 0.95,
+        }
       });
 
       const result = await chat.sendMessageStream({ message: prompt });
@@ -239,7 +246,7 @@ export const streamGeminiResponse = async (
 
       success = true;
 
-      // Update Usage for Text Key
+      // Update Usage
       let totalTokens = 0;
       if (usageMetadata) {
           totalTokens = usageMetadata.totalTokenCount;
@@ -248,12 +255,12 @@ export const streamGeminiResponse = async (
           totalTokens = inputTokens + outputTokens;
       }
       if (totalTokens > 0) {
-          updateTokenUsage(currentKeyIndex, totalTokens);
+          updateTokenUsage(currentTextKeyIndex, totalTokens);
       }
 
-      // Remove from rate limited set if it succeeds
-      if (rateLimitedKeys.has(currentKeyIndex)) {
-          rateLimitedKeys.delete(currentKeyIndex);
+      // Clear Rate Limit flag if successful
+      if (rateLimitedKeys.has(currentTextKeyIndex)) {
+          rateLimitedKeys.delete(currentTextKeyIndex);
           notifyListeners();
       }
 
@@ -266,51 +273,43 @@ export const streamGeminiResponse = async (
                           error.status === 429 ||
                           error.toString().includes('Resource has been exhausted');
       
-      const isQuotaZero = error.message?.includes('limit: 0');
-
       if (isRateLimit) {
-          rateLimitedKeys.add(currentKeyIndex);
-          if (isQuotaZero) {
-              console.warn(`[Gemini] Key ${currentKeyIndex + 1} has 0 quota for model ${GEMINI_MODEL}.`);
-          } else {
-              console.warn(`[Gemini] Key ${currentKeyIndex + 1} hit rate limit.`);
-          }
+          rateLimitedKeys.add(currentTextKeyIndex);
+          console.warn(`[Gemini] Key ${currentTextKeyIndex + 1} hit rate limit.`);
       } else {
-          console.warn(`[Gemini] Error on Key ${currentKeyIndex + 1}:`, error.message);
+          console.warn(`[Gemini] Error on Key ${currentTextKeyIndex + 1}:`, error.message);
       }
 
       attempts++;
       
       if (attempts < maxAttempts) {
-          switchToNextKey();
+          rotateTextKey();
           await delay(1000); 
           continue; 
       }
       
       if (attempts >= maxAttempts) {
-         onChunk(`\n\n*Error: Unable to generate response. All ${maxAttempts} keys failed. Last error: ${error.message}*`);
+         onChunk(`\n\n*Error: Unable to generate response. All keys failed. Last error: ${error.message}*`);
          return; 
       }
     }
   }
 };
 
-// --- Speech Generation ---
-
 export const generateSpeech = async (text: string, voiceName: string = 'Charon'): Promise<string | null> => {
-    // 1. Filter out code blocks to prevent reading code
     const cleanText = text
-        .replace(/```[\s\S]*?```/g, '') // Remove multi-line code blocks
-        .replace(/`.*?`/g, '') // Remove inline code
-        .replace(/<[^>]*>/g, '') // Remove HTML tags just in case
+        .replace(/```[\s\S]*?```/g, '') 
+        .replace(/`.*?`/g, '') 
+        .replace(/<[^>]*>/g, '') 
         .trim();
 
     if (!cleanText || cleanText.length < 2) return null;
 
     try {
-        const ai = getSpeechClient();
+        const ai = getSpeechClient(); // Uses Key 5 (Index 4) explicitly
         
-        // Use single-turn generateContent for TTS
+        console.log(`[Gemini TTS] Generating speech with model ${GEMINI_TTS_MODEL} using Key 5...`);
+
         const response = await ai.models.generateContent({
             model: GEMINI_TTS_MODEL,
             contents: [{ parts: [{ text: cleanText }] }],
@@ -318,7 +317,6 @@ export const generateSpeech = async (text: string, voiceName: string = 'Charon')
                 responseModalities: [Modality.AUDIO],
                 speechConfig: {
                     voiceConfig: {
-                        // Dynamic voice name
                         prebuiltVoiceConfig: { voiceName: voiceName }
                     }
                 }
@@ -327,19 +325,21 @@ export const generateSpeech = async (text: string, voiceName: string = 'Charon')
 
         const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (base64Audio) {
-            // Track Usage for Key 5 (Index 4)
+            // Track Usage for Key 5
             const usage = response.usageMetadata;
             if (usage) {
                 updateTokenUsage(SPEECH_KEY_INDEX, usage.totalTokenCount);
             }
-            
-            // Return raw base64 data to store in Firebase
+            // Clear rate limit if successful
+            if (rateLimitedKeys.has(SPEECH_KEY_INDEX)) {
+                rateLimitedKeys.delete(SPEECH_KEY_INDEX);
+                notifyListeners();
+            }
             return base64Audio;
         }
 
     } catch (e: any) {
         console.error("[Gemini TTS] Failed to generate speech:", e);
-        // We do not fallback for TTS, as it is exclusive to Key 5
         rateLimitedKeys.add(SPEECH_KEY_INDEX);
         notifyListeners();
     }
