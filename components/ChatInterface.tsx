@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon, XMarkIcon, MenuIcon, CodeBracketIcon } from './Icons';
 import { Message, CanvasState, Presence, Group, UserChatMessage } from '../types';
 import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS, base64ToWav } from '../services/geminiService';
@@ -67,6 +67,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const userChatEndRef = useRef<HTMLDivElement>(null);
+  const aiInputRef = useRef<HTMLTextAreaElement>(null);
+  const userInputRef = useRef<HTMLTextAreaElement>(null);
 
   // UI State
   const [mobileView, setMobileView] = useState<'chat' | 'canvas'>('chat');
@@ -78,6 +80,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [canvasState, setCanvasState] = useState<CanvasState>({ html: '', css: '', js: '', lastUpdated: 0, terminalOutput: [] });
   const [tokenUsage, setTokenUsage] = useState<any>({});
+
+  // Resizable Sidebar State
+  const [sidebarWidth, setSidebarWidth] = useState(450); // Default width in pixels
+  const [isDragging, setIsDragging] = useState(false);
   
   // Audio State
   const [audioCache, setAudioCache] = useState<Record<string, string>>({}); 
@@ -103,6 +109,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(() => {
     scrollToBottom(userChatEndRef);
   }, [userChatMessages, chatMode]);
+
+  // Resizable Logic
+  const startResizing = useCallback(() => {
+      setIsDragging(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+      setIsDragging(false);
+  }, []);
+
+  const resize = useCallback((mouseMoveEvent: MouseEvent) => {
+      if (isDragging) {
+          const newWidth = mouseMoveEvent.clientX;
+          // Constraints: Min 300px, Max 70% of screen width
+          if (newWidth > 300 && newWidth < window.innerWidth * 0.7) {
+            setSidebarWidth(newWidth);
+          }
+      }
+  }, [isDragging]);
+
+  useEffect(() => {
+      window.addEventListener("mousemove", resize);
+      window.addEventListener("mouseup", stopResizing);
+      return () => {
+          window.removeEventListener("mousemove", resize);
+          window.removeEventListener("mouseup", stopResizing);
+      };
+  }, [resize, stopResizing]);
+
 
   // --- Notification Logic ---
   useEffect(() => {
@@ -464,6 +499,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setIsSending(false);
   };
 
+  const resetTextareaHeight = (ref: React.RefObject<HTMLTextAreaElement>) => {
+    if (ref.current) {
+        ref.current.style.height = 'auto';
+    }
+  };
+
   const handleSend = async () => {
     if (!input.trim() || !groupId) return;
     
@@ -493,6 +534,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
         }
         setInput('');
+        resetTextareaHeight(aiInputRef);
     } catch (e) {
         console.error("Error sending", e);
     }
@@ -508,6 +550,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               photoURL: currentUser.photoURL
           });
           setUserChatInput('');
+          resetTextareaHeight(userInputRef);
       } catch (e) {
           console.error("Error sending user chat", e);
       }
@@ -519,18 +562,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent, type: 'ai' | 'user' = 'ai') => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  // Helper for auto-expanding textarea
+  const adjustHeight = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      e.target.style.height = 'auto';
+      e.target.style.height = `${e.target.scrollHeight}px`;
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, type: 'ai' | 'user' = 'ai') => {
+    // Enter without Shift/Ctrl sends
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
       e.preventDefault();
       if (type === 'ai') handleSend();
       else handleUserChatSend();
     }
+    // Shift+Enter or Ctrl+Enter will perform default behavior (newline) which is handled by textarea natively
   };
 
   const handleEdit = async (msg: Message) => {
       await setGroupLock(groupId!, currentUser.uid);
       setEditingMessageId(msg.id);
       setInput(msg.text);
+      // Timeout to allow state update before resizing
+      setTimeout(() => {
+        if (aiInputRef.current) {
+            aiInputRef.current.style.height = 'auto';
+            aiInputRef.current.style.height = `${aiInputRef.current.scrollHeight}px`;
+            aiInputRef.current.focus();
+        }
+      }, 0);
+
       if (chatMode !== 'both') setChatMode('ai');
   };
 
@@ -716,16 +776,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <button onClick={() => { setEditingMessageId(null); setInput(''); setGroupLock(groupId!, null); }} className="hover:underline">Cancel</button>
                 </div>
             )}
-            <div className={`bg-[#1E1F20] rounded-full flex items-center px-3 gap-2 border smooth-transition ${isCompact ? 'py-1' : 'py-2'} ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}`}>
-                <input 
-                    type="text" 
+            <div className={`bg-[#1E1F20] rounded-3xl flex items-end px-3 gap-2 border smooth-transition ${isCompact ? 'py-1' : 'py-2'} ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}`}>
+                <textarea 
+                    ref={aiInputRef}
+                    rows={1}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={(e) => {
+                        setInput(e.target.value);
+                        adjustHeight(e);
+                    }}
                     onKeyDown={(e) => handleKeyDown(e, 'ai')}
                     placeholder={editingMessageId ? "Edit prompt..." : "Ask Gemini..."}
-                    className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5]"
+                    className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5] resize-none overflow-hidden max-h-32 py-2"
                 />
                 
+                <div className="pb-1.5">
                 {isSystemBusy && !input.trim() ? (
                     <button 
                         onClick={handleStop} 
@@ -748,6 +813,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <SendIcon />
                     </button>
                 )}
+                </div>
             </div>
         </div>
       </div>
@@ -882,8 +948,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   />
               ))}
 
-              <div className={`bg-[#2A2B2D] rounded-full flex items-center px-3 gap-2 border border-transparent focus-within:border-[#5E5E5E] smooth-transition ${isCompact ? 'py-1' : 'py-2'}`}>
+              <div className={`bg-[#2A2B2D] rounded-3xl flex items-end px-3 gap-2 border border-transparent focus-within:border-[#5E5E5E] smooth-transition ${isCompact ? 'py-1' : 'py-2'}`}>
                   {/* Call Button - Changed Logic to Join if call active */}
+                  <div className="pb-1.5">
                   <button 
                       onClick={handleCallAction}
                       disabled={isInCall}
@@ -896,17 +963,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   >
                       <PhoneIcon className="w-5 h-5" />
                   </button>
+                  </div>
 
-                  <input 
-                      type="text" 
+                  <textarea 
+                      ref={userInputRef}
+                      rows={1}
                       value={userChatInput}
-                      onChange={(e) => setUserChatInput(e.target.value)}
+                      onChange={(e) => {
+                          setUserChatInput(e.target.value);
+                          adjustHeight(e);
+                      }}
                       onKeyDown={(e) => handleKeyDown(e, 'user')}
                       placeholder="Message the group..."
-                      className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#5E5E5E]"
+                      className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#5E5E5E] resize-none overflow-hidden max-h-32 py-2"
                   />
                   
                   {/* Persistent Send Icon */}
+                  <div className="pb-1.5">
                   <button 
                       onClick={handleUserChatSend} 
                       disabled={!userChatInput.trim()}
@@ -918,6 +991,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   >
                       <SendIcon />
                   </button>
+                  </div>
               </div>
           </div>
       </div>
@@ -927,10 +1001,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     <div className="flex h-full bg-[#131314] overflow-hidden smooth-transition relative">
         
       {/* Left Panel (Main Content) */}
-      <div className={`flex flex-col border-r border-[#444746] smooth-transition duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1.0)]
+      <div 
+        className={`flex flex-col border-r border-[#444746] smooth-transition duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1.0)]
             ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex'}
-            ${isCanvasCollapsed ? 'w-full' : 'w-[40%] min-w-[320px] max-w-[450px]'}
-      `}>
+            ${isCanvasCollapsed ? 'w-full' : ''}
+        `}
+        style={!isCanvasCollapsed && window.innerWidth >= 768 ? { width: sidebarWidth } : {}}
+      >
         
         {/* Top Bar */}
         <div className="h-14 shrink-0 flex items-center justify-between px-4 border-b border-[#444746] bg-[#131314]">
@@ -1115,6 +1192,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
 
       </div>
+
+      {/* Resizable Divider - Only visible on Desktop when Canvas is Open */}
+      {!isCanvasCollapsed && (
+         <div 
+            className="hidden md:flex w-1 h-full bg-[#131314] hover:bg-[#4285F4] cursor-col-resize items-center justify-center transition-colors delay-150 group z-50 resizer-handle"
+            onMouseDown={startResizing}
+         >
+             <div className="w-0.5 h-8 bg-[#444746] rounded-full group-hover:bg-white transition-colors"></div>
+         </div>
+      )}
 
       {/* Right Panel (Canvas) - Desktop - ALWAYS MOUNTED for Smooth Transition */}
       <div className={`hidden md:flex flex-col transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1.0)] h-full overflow-hidden border-l border-[#444746]
