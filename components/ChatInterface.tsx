@@ -624,6 +624,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   // --- Render Helpers ---
 
+  const cleanDisplayText = (text: string) => {
+      // Hide raw SEARCH/REPLACE blocks from the UI to prevent clutter
+      return text.replace(/<<<<SEARCH\n[\s\S]*?\n====\n[\s\S]*?\n>>>>/g, '\n\n`⚡ Patch Applied to Canvas`\n\n');
+  };
+
   const renderAIChat = (isCompact: boolean) => (
       <div className="flex flex-col h-full relative">
         <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center scroll-smooth relative">
@@ -638,6 +643,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const isPlaying = playingMessageId === msg.id;
                 const isGeneratingAudio = generatingAudioIds.has(msg.id);
                 const showAudioButton = isGemini && !msg.isLoading;
+
+                const displayText = isGemini ? cleanDisplayText(msg.text) : msg.text;
 
                 return (
                     <div 
@@ -683,7 +690,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     }
                                     }}
                                 >
-                                    {msg.text}
+                                    {displayText}
                                 </ReactMarkdown>
                             </div>
                             
