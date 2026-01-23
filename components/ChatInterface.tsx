@@ -927,9 +927,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     <div className="flex h-full bg-[#131314] overflow-hidden smooth-transition relative">
         
       {/* Left Panel (Main Content) */}
-      <div className={`flex flex-col border-r border-[#444746] smooth-transition
-            ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex w-full'} 
-            ${isCanvasCollapsed ? 'md:w-full max-w-4xl mx-auto md:border-r-0' : 'md:w-[35%] md:min-w-[350px]'}
+      <div className={`flex flex-col border-r border-[#444746] smooth-transition duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1.0)]
+            ${mobileView === 'canvas' ? 'hidden md:flex' : 'flex'}
+            ${isCanvasCollapsed ? 'w-full' : 'w-[40%] min-w-[320px] max-w-[450px]'}
       `}>
         
         {/* Top Bar */}
@@ -1093,47 +1093,49 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
 
         {/* --- Main Content Area based on Mode --- */}
-        <div className="flex-1 flex flex-col min-h-0 relative">
-            {chatMode === 'ai' && (
-                renderAIChat(false)
-            )}
-            {chatMode === 'user' && (
-                renderUserChat(false)
-            )}
-            {chatMode === 'both' && (
-                <div className="flex flex-col h-full">
-                    <div className="h-[50%] flex flex-col min-h-0 border-b border-[#444746]">
-                        {renderAIChat(true)}
+        <div className="flex-1 flex flex-col min-h-0 relative group">
+            <div className={`h-full flex flex-col ${isCanvasCollapsed ? 'w-full max-w-5xl mx-auto' : 'w-full'}`}>
+                {chatMode === 'ai' && (
+                    renderAIChat(false)
+                )}
+                {chatMode === 'user' && (
+                    renderUserChat(false)
+                )}
+                {chatMode === 'both' && (
+                    <div className="flex flex-col h-full">
+                        <div className="h-[50%] flex flex-col min-h-0 border-b border-[#444746]">
+                            {renderAIChat(true)}
+                        </div>
+                        <div className="h-[50%] flex flex-col min-h-0">
+                            {renderUserChat(true)}
+                        </div>
                     </div>
-                    <div className="h-[50%] flex flex-col min-h-0">
-                        {renderUserChat(true)}
-                    </div>
-                </div>
-            )}
+                )}
+            </div>
         </div>
 
       </div>
 
-      {/* Right Panel (Canvas) - Desktop */}
-      {!isCanvasCollapsed && (
-          <div className="hidden md:flex flex-col min-w-0 smooth-transition flex-1 h-full">
-             <div className="h-8 bg-[#1E1F20] border-b border-[#444746] flex items-center justify-end px-2">
-                 <button 
-                    onClick={() => setIsCanvasCollapsed && setIsCanvasCollapsed(true)}
-                    className="hidden md:block p-1 hover:bg-[#333537] text-[#C4C7C5] rounded smooth-transition"
-                    title="Collapse Canvas"
-                 >
-                     <ChevronRightIcon />
-                 </button>
-             </div>
-             <div className="flex-1 overflow-hidden">
-                <Canvas 
-                    canvasState={canvasState} 
-                    groupId={groupId || 'demo'} 
-                />
-             </div>
-          </div>
-      )}
+      {/* Right Panel (Canvas) - Desktop - ALWAYS MOUNTED for Smooth Transition */}
+      <div className={`hidden md:flex flex-col transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1.0)] h-full overflow-hidden border-l border-[#444746]
+            ${isCanvasCollapsed ? 'w-0 opacity-0 border-l-0' : 'flex-1 opacity-100'}
+      `}>
+         <div className="h-8 bg-[#1E1F20] border-b border-[#444746] flex items-center justify-end px-2 shrink-0">
+             <button 
+                onClick={() => setIsCanvasCollapsed && setIsCanvasCollapsed(true)}
+                className="hidden md:block p-1 hover:bg-[#333537] text-[#C4C7C5] rounded smooth-transition"
+                title="Collapse Canvas"
+             >
+                 <ChevronRightIcon />
+             </button>
+         </div>
+         <div className="flex-1 overflow-hidden">
+            <Canvas 
+                canvasState={canvasState} 
+                groupId={groupId || 'demo'} 
+            />
+         </div>
+      </div>
 
       {/* Mobile Canvas Overlay - Optimized for GPU Animation */}
       <div 
