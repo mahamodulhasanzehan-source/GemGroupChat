@@ -50,6 +50,12 @@ body {
   transition-duration: 300ms;
 }
 
+/* Resizer Handle */
+.resizer-handle:hover {
+    background-color: #4285F4;
+    transition-delay: 0s;
+}
+
 /* Specific Animation Utilities */
 
 /* For elements appearing */
