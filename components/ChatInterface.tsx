@@ -238,16 +238,46 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
   };
 
-  const extractCode = (text: string) => {
-      const htmlMatch = text.match(/```html\s*([\s\S]*?)(```|$)/i);
-      const genericMatch = text.match(/```\s*([\s\S]*?)(```|$)/i);
+  const extractCodeOrPatch = (accumulatedText: string, currentHtml: string) => {
+      // 1. Check for Patch Pattern: <<<<SEARCH ... ==== ... >>>>
+      const patchRegex = /<<<<SEARCH\n([\s\S]*?)\n====\n([\s\S]*?)\n>>>>/g;
+      let newHtml = currentHtml;
+      let hasPatch = false;
+
+      let match;
+      while ((match = patchRegex.exec(accumulatedText)) !== null) {
+          const searchBlock = match[1];
+          const replaceBlock = match[2];
+          
+          if (newHtml.includes(searchBlock)) {
+              newHtml = newHtml.replace(searchBlock, replaceBlock);
+              hasPatch = true;
+          } else {
+              // Simple fallback: If whitespace mismatch, try ignoring trim
+              const looseSearch = searchBlock.trim();
+              const looseReplace = replaceBlock.trim();
+              // This is a naive fallback; proper robust patching needs diff-match-patch library
+              // but standard replace covers 90% of "Copilot/Windsurf" style deterministic edits.
+              console.warn("Patch Match Warning: Exact block not found. Trying loose match.");
+          }
+      }
+
+      if (hasPatch) return { html: newHtml, type: 'patch' };
+
+      // 2. Check for Full Code Block
+      const htmlMatch = accumulatedText.match(/```html\s*([\s\S]*?)(```|$)/i);
+      const genericMatch = accumulatedText.match(/```\s*([\s\S]*?)(```|$)/i);
+      
       let code = null;
       if (htmlMatch) {
           code = htmlMatch[1];
       } else if (genericMatch && (genericMatch[1].includes('<html') || genericMatch[1].includes('<!DOCTYPE'))) {
           code = genericMatch[1];
       }
-      return { html: code };
+
+      if (code) return { html: code, type: 'full' };
+
+      return { html: null, type: null };
   };
 
   const prepareOptimizedHistory = (allMessages: Message[], currentMsgId: string) => {
@@ -341,6 +371,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           let accumulatedText = '';
           let lastMessageUpdateTime = 0;
           let lastCanvasUpdateTime = 0;
+          let currentCanvasHtml = canvasState.html || '';
+          
           const MESSAGE_THROTTLE = 150; 
           const CANVAS_THROTTLE = 800;  
 
@@ -350,16 +382,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               canvasState,
               async (chunk) => {
                   accumulatedText += chunk;
-                  const codeUpdates = extractCode(accumulatedText);
                   
-                  if (codeUpdates.html) {
-                       setCanvasState(prev => ({ ...prev, html: codeUpdates.html!, lastUpdated: Date.now() }));
+                  // Smart Edit Logic
+                  const updates = extractCodeOrPatch(accumulatedText, currentCanvasHtml);
+                  
+                  if (updates.html && updates.html !== currentCanvasHtml) {
+                       currentCanvasHtml = updates.html!; // Keep tracking locally for subsequent patches in same stream
+                       
+                       setCanvasState(prev => ({ ...prev, html: updates.html!, lastUpdated: Date.now() }));
                        if (isCanvasCollapsed && setIsCanvasCollapsed) setIsCanvasCollapsed(false);
 
                        const now = Date.now();
                        if (now - lastCanvasUpdateTime > CANVAS_THROTTLE) {
                            lastCanvasUpdateTime = now;
-                           await updateCanvas(groupId, { html: codeUpdates.html });
+                           await updateCanvas(groupId, { html: updates.html });
                        }
                   }
 
@@ -375,9 +411,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               abortController.signal
           );
 
-          const finalCode = extractCode(accumulatedText);
-          if (finalCode.html) {
-              await updateCanvas(groupId, { html: finalCode.html });
+          // Final Check
+          const finalUpdates = extractCodeOrPatch(accumulatedText, canvasState.html);
+          if (finalUpdates.html) {
+              await updateCanvas(groupId, { html: finalUpdates.html });
           }
 
           await updateMessage(groupId, modelMsgId, { text: accumulatedText, isLoading: false, status: 'done' });

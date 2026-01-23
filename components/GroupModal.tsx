@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createGroup, isConfigured, getGroupDetails, signOut, checkGroupNameTaken, getAllPublicGroups } from '../services/firebase';
+import { createGroup, isConfigured, getGroupDetails, signOut, checkGroupNameTaken, getAllPublicGroups, joinGroup } from '../services/firebase';
 
 interface GroupModalProps {
   isOpen: boolean;
@@ -102,9 +102,14 @@ const GroupModal: React.FC<GroupModalProps> = ({ isOpen, mode = 'create', onClos
   const handleJoinSpecific = async (groupId: string) => {
     setIsLoading(true);
     try {
+        // Add user to the group members list in Firestore
+        if (currentUser && currentUser.uid) {
+            await joinGroup(groupId, currentUser.uid);
+        }
         window.location.hash = `/group/${groupId}`;
         onClose();
     } catch (e) {
+        console.error(e);
         setError("Error joining group.");
     } finally {
         setIsLoading(false);

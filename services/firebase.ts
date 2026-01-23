@@ -1,4 +1,3 @@
-
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch, limit, arrayUnion, arrayRemove } from 'firebase/firestore';
@@ -293,6 +292,21 @@ export const createGroup = async (name: string, creatorId: string): Promise<stri
   });
 
   return groupRef.id;
+};
+
+export const joinGroup = async (groupId: string, userId: string) => {
+    if (!isConfigured || !db) {
+        if (mockDb[groupId] && !mockDb[groupId].details.members.includes(userId)) {
+            mockDb[groupId].details.members.push(userId);
+            notifyMockGroupListeners();
+        }
+        return;
+    }
+
+    const groupRef = doc(db, 'groups', groupId);
+    await updateDoc(groupRef, {
+        members: arrayUnion(userId)
+    });
 };
 
 export const getGroupDetails = async (groupId: string) => {

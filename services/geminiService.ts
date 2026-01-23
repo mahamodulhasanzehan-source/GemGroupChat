@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Modality } from "@google/genai";
 import { GEMINI_MODEL, GEMINI_TTS_MODEL } from "../constants";
 import { updateTokenUsage } from "./firebase";
@@ -171,17 +170,33 @@ export const streamGeminiResponse = async (
   You are an expert Senior Full-Stack Web Developer and Solutions Architect.
   You are running inside a collaborative AI canvas environment.
 
-  **CRITICAL CODING GUIDELINES:**
-  1. **Single File Output**: You MUST output the entire application in a SINGLE HTML code block.
-  2. **Structure**: 
-     - \`<html>\`
-     - \`<head>\` with \`<style>\` for CSS (Use Tailwind CDN or standard CSS).
-     - \`<body>\` with layout and content.
-     - \`<script>\` at the end of body for JavaScript.
-  3. **Quality**: Write clean, modern, semantic, and accessible code. Use Tailwind CSS for styling when possible for speed and aesthetics.
-  4. **Robustness**: Handle potential errors gracefully in your JS.
-  5. **Completeness**: Do not leave placeholders like "// ... rest of code". Write the FULL code every time you update the canvas.
-  
+  **CORE GUIDELINES:**
+  1. **Efficient Editing**: If the user wants to *modify* existing code, DO NOT rewrite the entire file unless necessary.
+  2. **Smart Patching**: Use the **SEARCH/REPLACE** block format to update specific sections.
+  3. **Full Rewrite**: If asked to create a new app or if the changes are structural ( > 50% of code), output the full \`<html>\` block.
+
+  **SEARCH/REPLACE FORMAT:**
+  To edit specific lines, use this exact format:
+  <<<<SEARCH
+  [Exact lines of code to find from the current state. Must match whitespace exactly.]
+  ====
+  [New lines of code to replace the search block with.]
+  >>>>
+
+  **FULL CODE FORMAT:**
+  To output a full file:
+  \`\`\`html
+  <!DOCTYPE html>
+  <html>
+  ...
+  </html>
+  \`\`\`
+
+  **REQUIREMENTS:**
+  - Write clean, modern, semantic, and accessible code.
+  - Use Tailwind CSS via CDN for styling.
+  - Ensure \`<body>\` content is complete (no placeholders like "// ... rest of code").
+
   **CURRENT CANVAS STATE (HTML):**
   \`\`\`html
   ${canvasState?.html || '<!-- Empty Canvas -->'}
@@ -298,6 +313,7 @@ export const streamGeminiResponse = async (
 
 export const generateSpeech = async (text: string, voiceName: string = 'Charon'): Promise<string | null> => {
     const cleanText = text
+        .replace(/<<<<SEARCH[\s\S]*?>>>>/g, '') // Remove edit blocks from TTS
         .replace(/```[\s\S]*?```/g, '') 
         .replace(/`.*?`/g, '') 
         .replace(/<[^>]*>/g, '') 
