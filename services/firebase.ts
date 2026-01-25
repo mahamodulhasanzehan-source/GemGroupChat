@@ -1,6 +1,10 @@
+
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as firebaseSignOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
+import * as _firebaseAuth from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, increment, deleteDoc, writeBatch, limit, arrayUnion, arrayRemove } from 'firebase/firestore';
+
+// Workaround for firebase/auth export resolution issues in some environments
+const { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut: firebaseSignOut, onAuthStateChanged, updateProfile } = _firebaseAuth as any;
 
 // Hardcoded Configuration provided by user
 const firebaseConfig = {
@@ -555,6 +559,33 @@ export const deleteMessage = async (groupId: string, messageId: string) => {
     // Real Mode
     const msgRef = doc(db, 'groups', groupId, 'messages', messageId);
     await deleteDoc(msgRef);
+}
+
+// Delete Message Attachment (New)
+export const deleteMessageAttachment = async (groupId: string, messageId: string, attachmentIndex: number) => {
+    // Offline Mode
+    if (!isConfigured || !db) {
+        if (mockDb[groupId]) {
+            const msg = mockDb[groupId].messages.find((m: any) => m.id === messageId);
+            if (msg && msg.attachments) {
+                msg.attachments.splice(attachmentIndex, 1);
+                mockListeners[groupId]?.forEach(cb => cb(mockDb[groupId].messages));
+            }
+        }
+        return;
+    }
+
+    // Real Mode: We need to fetch, modify, and update because arrayRemove needs exact object
+    const msgRef = doc(db, 'groups', groupId, 'messages', messageId);
+    const snap = await getDoc(msgRef);
+    if (snap.exists()) {
+        const data = snap.data();
+        if (data.attachments && data.attachments.length > attachmentIndex) {
+            const newAttachments = [...data.attachments];
+            newAttachments.splice(attachmentIndex, 1);
+            await updateDoc(msgRef, { attachments: newAttachments });
+        }
+    }
 }
 
 // Delete User Chat Message (New)

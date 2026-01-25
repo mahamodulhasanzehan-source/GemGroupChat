@@ -8,6 +8,7 @@ import {
     subscribeToCanvas, updateCanvas, 
     subscribeToPresence, updatePresence, setGroupLock,
     subscribeToUserChat, sendUserChatMessage, deleteUserChatMessage,
+    deleteMessageAttachment
 } from '../services/firebase';
 import { useGroupCall } from '../hooks/useGroupCall';
 import ReactMarkdown from 'react-markdown';
@@ -64,6 +65,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
 
+  // Context Menu State for Images
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, msgId: string, attIndex: number } | null>(null);
+
   // Call Logic Extracted to Hook
   const { 
       isInCall, isMuted, visualizerData, remoteStreams, 
@@ -115,6 +119,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(() => {
     scrollToBottom(userChatEndRef);
   }, [userChatMessages, chatMode]);
+
+  // Click away to close context menu
+  useEffect(() => {
+      const handleClick = () => setContextMenu(null);
+      window.addEventListener('click', handleClick);
+      return () => window.removeEventListener('click', handleClick);
+  }, []);
 
   // Resizable Logic
   const startResizing = useCallback(() => {
@@ -749,6 +760,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
            setHiddenMessageIds(prev => new Set(prev).add(msg.id));
       }
   };
+
+  const handleImageContextMenu = (e: React.MouseEvent, msgId: string, index: number) => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, msgId, attIndex: index });
+  };
+
+  const handleDeleteImage = async () => {
+      if (contextMenu && groupId) {
+          await deleteMessageAttachment(groupId, contextMenu.msgId, contextMenu.attIndex);
+          setContextMenu(null);
+      }
+  };
   
   const visibleMessages = localMessages.filter(m => !hiddenMessageIds.has(m.id));
   const queuedMessages = localMessages.filter(m => m.status === 'queued' && m.role === 'user');
@@ -778,7 +801,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const renderAIChat = (isCompact: boolean) => (
       <div className="flex flex-col h-full relative">
         <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center scroll-smooth relative">
-            <div className="w-full space-y-6 pb-4">
+            {/* Removed max-w-5xl mx-auto to fix black bars layout issue */}
+            <div className="w-full space-y-6 pb-4 px-4">
                 {visibleMessages.map((msg, index) => {
                 const isMe = msg.senderId === currentUser.uid;
                 const isGemini = msg.role === 'model';
@@ -812,12 +836,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {msg.attachments && msg.attachments.length > 0 && (
                                 <div className={`flex flex-wrap gap-2 mb-2 ${isUserRole ? 'justify-end' : 'justify-start'}`}>
                                     {msg.attachments.map((att, i) => (
-                                        <div key={i} className="relative rounded-lg overflow-hidden border border-[#444746]">
+                                        <div 
+                                            key={i} 
+                                            className="relative rounded-lg overflow-hidden border border-[#444746] cursor-context-menu"
+                                            onContextMenu={(e) => handleImageContextMenu(e, msg.id, i)}
+                                        >
                                             <img 
                                                 src={`data:${att.mimeType};base64,${att.data}`} 
                                                 alt="Attachment" 
                                                 className="max-h-48 max-w-[200px] object-cover"
                                             />
+                                            {/* Hint overlay on hover to show it's interactable */}
+                                            <div className="absolute inset-0 bg-black/0 hover:bg-black/10 transition-colors pointer-events-none"></div>
                                         </div>
                                     ))}
                                 </div>
@@ -909,6 +939,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <div ref={messagesEndRef} />
             </div>
         </div>
+
+        {/* Image Context Menu */}
+        {contextMenu && (
+            <div 
+                className="fixed z-50 bg-[#1E1F20] border border-[#444746] rounded-lg shadow-xl py-1 w-32 animate-fade-in"
+                style={{ top: contextMenu.y, left: contextMenu.x }}
+            >
+                <button 
+                    onClick={handleDeleteImage}
+                    className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-[#333537] flex items-center gap-2"
+                >
+                    <TrashIcon className="w-4 h-4" /> Delete Image
+                </button>
+            </div>
+        )}
 
         {(queuedMessages.length > 0 || isSystemBusy) && (
              <div className="bg-[#1A1A1C] border-t border-[#444746] px-4 py-2 flex items-center justify-between z-30 smooth-transition">
