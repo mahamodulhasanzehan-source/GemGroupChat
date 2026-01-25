@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon, XMarkIcon, MenuIcon, CodeBracketIcon } from './Icons';
-import { Message, CanvasState, Presence, Group, UserChatMessage } from '../types';
+import { SendIcon, ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, TrashIcon, PencilIcon, SpeakerIcon, StopCircleIcon, MicIcon, XMarkIcon, MenuIcon, CodeBracketIcon, ImageUploadIcon } from './Icons';
+import { Message, CanvasState, Presence, Group, UserChatMessage, Attachment } from '../types';
 import { streamGeminiResponse, generateSpeech, subscribeToKeyStatus, setManualKey, TOTAL_KEYS, base64ToWav } from '../services/geminiService';
 import { 
     subscribeToMessages, sendMessage, updateMessage, deleteMessage,
@@ -58,6 +58,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [unreadUserCount, setUnreadUserCount] = useState(0);
   const [hasAIUpdate, setHasAIUpdate] = useState(false);
   
+  // Multimodal State
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Call Logic Extracted to Hook
   const { 
       isInCall, isMuted, visualizerData, remoteStreams, 
@@ -211,6 +216,121 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       };
   }, [groupId, currentUser]);
 
+  // Image Processing
+  const processFile = async (file: File): Promise<Attachment | null> => {
+      if (!file.type.startsWith('image/')) return null;
+
+      return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+              const img = new Image();
+              img.onload = () => {
+                  // Compression: Resize to max 1024px dimension, 0.7 quality jpeg
+                  const canvas = document.createElement('canvas');
+                  let width = img.width;
+                  let height = img.height;
+                  const maxDim = 1024;
+                  
+                  if (width > maxDim || height > maxDim) {
+                      if (width > height) {
+                          height = Math.round((height * maxDim) / width);
+                          width = maxDim;
+                      } else {
+                          width = Math.round((width * maxDim) / height);
+                          height = maxDim;
+                      }
+                  }
+                  
+                  canvas.width = width;
+                  canvas.height = height;
+                  const ctx = canvas.getContext('2d');
+                  ctx?.drawImage(img, 0, 0, width, height);
+                  
+                  // Get Base64 without prefix
+                  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                  const base64 = dataUrl.split(',')[1];
+                  
+                  resolve({
+                      type: 'image',
+                      mimeType: 'image/jpeg',
+                      data: base64
+                  });
+              };
+              img.src = e.target?.result as string;
+          };
+          reader.readAsDataURL(file);
+      });
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(false);
+      
+      const files = Array.from(e.dataTransfer.files);
+      const newAttachments: Attachment[] = [];
+      
+      for (const file of files) {
+          const att = await processFile(file);
+          if (att) newAttachments.push(att);
+      }
+      
+      if (newAttachments.length > 0) {
+          setPendingAttachments(prev => [...prev, ...newAttachments]);
+      }
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent) => {
+      const items = e.clipboardData.items;
+      const newAttachments: Attachment[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image') !== -1) {
+              const file = items[i].getAsFile();
+              if (file) {
+                  const att = await processFile(file);
+                  if (att) newAttachments.push(att);
+              }
+          }
+      }
+      
+      if (newAttachments.length > 0) {
+          setPendingAttachments(prev => [...prev, ...newAttachments]);
+      }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files) {
+          const files = Array.from(e.target.files);
+          const newAttachments: Attachment[] = [];
+          
+          for (const file of files) {
+              const att = await processFile(file);
+              if (att) newAttachments.push(att);
+          }
+          
+          if (newAttachments.length > 0) {
+              setPendingAttachments(prev => [...prev, ...newAttachments]);
+          }
+      }
+      // Reset input so same file can be selected again
+      if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeAttachment = (index: number) => {
+      setPendingAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+
   // Audio Player Logic (TTS)
   const handlePlayAudio = async (msg: Message) => {
       const msgId = msg.id;
@@ -321,12 +441,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         .map(m => ({
             role: m.role as 'user' | 'model',
             text: m.role === 'user' ? `[${m.senderName}]: ${m.text}` : m.text,
+            attachments: m.attachments, // Include attachments in history
             originalText: m.text 
         }));
 
       const MAX_HISTORY = 10;
       if (fullHistory.length <= MAX_HISTORY) {
-          return fullHistory.map(m => ({ role: m.role, text: m.text }));
+          return fullHistory.map(m => ({ role: m.role, text: m.text, attachments: m.attachments }));
       }
 
       const recentHistory = fullHistory.slice(-MAX_HISTORY);
@@ -342,7 +463,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           ${olderHistory.length} older messages were omitted to save tokens.`
       };
 
-      return [summaryMsg, ...recentHistory.map(m => ({ role: m.role, text: m.text }))];
+      return [summaryMsg, ...recentHistory.map(m => ({ role: m.role, text: m.text, attachments: m.attachments }))];
   };
 
   useEffect(() => {
@@ -400,8 +521,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             status: 'generating'
           });
 
+          // Prepare history including the current message with its attachments
           const validHistory = prepareOptimizedHistory(localMessages, userMsg.id);
-          validHistory.push({ role: 'user', text: `[${userMsg.senderName}]: ${userMsg.text}` });
+          
+          validHistory.push({ 
+              role: 'user', 
+              text: `[${userMsg.senderName}]: ${userMsg.text}`,
+              attachments: userMsg.attachments 
+          });
 
           let accumulatedText = '';
           let lastMessageUpdateTime = 0;
@@ -506,7 +633,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleSend = async () => {
-    if (!input.trim() || !groupId) return;
+    if ((!input.trim() && pendingAttachments.length === 0) || !groupId) return;
     
     if (groupDetails?.lockedBy && groupDetails.lockedBy !== currentUser.uid) {
         if (Date.now() - (groupDetails.lockedAt || 0) < 120000) {
@@ -520,7 +647,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     try {
         if (editingMessageId) {
-             await updateMessage(groupId, editingMessageId, { text: input });
+             await updateMessage(groupId, editingMessageId, { text: input }); // Editing doesn't support changing images yet
              await setGroupLock(groupId, null);
              setEditingMessageId(null);
         } else {
@@ -530,10 +657,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 text: input,
                 senderId: currentUser.uid,
                 senderName: senderDisplayName,
-                role: 'user'
+                role: 'user',
+                attachments: pendingAttachments
             });
         }
         setInput('');
+        setPendingAttachments([]);
         resetTextareaHeight(aiInputRef);
     } catch (e) {
         console.error("Error sending", e);
@@ -662,6 +791,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         </div>
                     
                         <div className={`flex flex-col max-w-[90%] ${isUserRole ? 'items-end' : 'items-start'}`}>
+                            {/* Images for User Messages */}
+                            {msg.attachments && msg.attachments.length > 0 && (
+                                <div className={`flex flex-wrap gap-2 mb-2 ${isUserRole ? 'justify-end' : 'justify-start'}`}>
+                                    {msg.attachments.map((att, i) => (
+                                        <div key={i} className="relative rounded-lg overflow-hidden border border-[#444746]">
+                                            <img 
+                                                src={`data:${att.mimeType};base64,${att.data}`} 
+                                                alt="Attachment" 
+                                                className="max-h-48 max-w-[200px] object-cover"
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
                             <div className={`
                                 prose prose-invert prose-sm text-[#E3E3E3] leading-relaxed break-words max-w-full rounded-lg px-3 py-2 shadow-sm smooth-transition
                                 ${isUserRole ? 'bg-[#1E1F20]' : 'bg-transparent pl-0'}
@@ -776,14 +920,69 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
              </div>
         )}
 
-        <div className={`bg-[#131314] border-t border-[#444746] z-30 ${isCompact ? 'p-1' : 'p-3'}`}>
+        {/* Input Area */}
+        <div className={`bg-[#131314] border-t border-[#444746] z-30 ${isCompact ? 'p-1' : 'p-3'} relative`}>
             {editingMessageId && (
                 <div className="text-xs text-[#A8C7FA] mb-1 flex justify-between">
                     <span>Editing...</span>
                     <button onClick={() => { setEditingMessageId(null); setInput(''); setGroupLock(groupId!, null); }} className="hover:underline">Cancel</button>
                 </div>
             )}
-            <div className={`bg-[#1E1F20] rounded-3xl flex items-end px-3 gap-2 border smooth-transition ${isCompact ? 'py-1' : 'py-2'} ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}`}>
+
+            {/* Drag & Drop Overlay */}
+            {isDragOver && (
+                <div className="absolute inset-0 z-40 bg-[#4285F4]/20 border-2 border-dashed border-[#4285F4] rounded-lg flex items-center justify-center backdrop-blur-sm m-3">
+                    <span className="text-[#4285F4] font-medium text-sm">Drop images here</span>
+                </div>
+            )}
+
+            {/* Pending Attachments Preview */}
+            {pendingAttachments.length > 0 && (
+                <div className="flex items-center gap-2 px-3 pb-2 overflow-x-auto">
+                    {pendingAttachments.map((att, i) => (
+                        <div key={i} className="relative group shrink-0">
+                            <div className="w-16 h-16 rounded-md border border-[#444746] overflow-hidden">
+                                <img src={`data:${att.mimeType};base64,${att.data}`} className="w-full h-full object-cover" alt="preview" />
+                            </div>
+                            <button 
+                                onClick={() => removeAttachment(i)}
+                                className="absolute -top-1.5 -right-1.5 bg-[#1E1F20] text-white rounded-full p-0.5 border border-[#444746] hover:bg-red-500"
+                            >
+                                <XMarkIcon className="w-3 h-3" />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <div 
+                className={`bg-[#1E1F20] rounded-3xl flex items-end px-3 gap-2 border smooth-transition ${isCompact ? 'py-1' : 'py-2'} 
+                ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}
+                ${isDragOver ? 'border-[#4285F4]' : ''}
+                `}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+            >
+                {/* File Input Button */}
+                <div className="pb-1.5">
+                    <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-1.5 rounded-full text-[#C4C7C5] hover:text-white hover:bg-[#333537] smooth-transition"
+                        title="Upload Image"
+                    >
+                        <ImageUploadIcon className="w-5 h-5" />
+                    </button>
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        accept="image/*" 
+                        multiple 
+                        onChange={handleFileSelect}
+                    />
+                </div>
+
                 <textarea 
                     ref={aiInputRef}
                     rows={1}
@@ -793,12 +992,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         adjustHeight(e);
                     }}
                     onKeyDown={(e) => handleKeyDown(e, 'ai')}
-                    placeholder={editingMessageId ? "Edit prompt..." : "Ask Gemini..."}
+                    onPaste={handlePaste}
+                    placeholder={editingMessageId ? "Edit prompt..." : (pendingAttachments.length > 0 ? "Describe the image..." : "Ask Gemini or drag image here...")}
                     className="flex-1 bg-transparent border-none outline-none text-[#E3E3E3] text-sm placeholder-[#C4C7C5] resize-none overflow-hidden max-h-32 py-2"
                 />
                 
                 <div className="pb-1.5">
-                {isSystemBusy && !input.trim() ? (
+                {isSystemBusy && !input.trim() && pendingAttachments.length === 0 ? (
                     <button 
                         onClick={handleStop} 
                         className="p-1.5 bg-[#E3E3E3] text-black rounded-full hover:bg-white hover:scale-105 smooth-transition transform"
@@ -810,9 +1010,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                      // Persistent Send Icon (Gray when empty, Blue when has text)
                     <button 
                         onClick={handleSend}
-                        disabled={!input.trim() && !editingMessageId}
+                        disabled={(!input.trim() && pendingAttachments.length === 0) && !editingMessageId}
                         className={`p-1.5 rounded-full smooth-transition transform ${
-                            input.trim() || editingMessageId 
+                            (input.trim() || pendingAttachments.length > 0 || editingMessageId)
                             ? 'bg-[#A8C7FA] text-[#000] hover:scale-105' 
                             : 'bg-transparent text-[#444746] cursor-default'
                         }`}

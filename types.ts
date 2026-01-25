@@ -6,6 +6,12 @@ export interface UserProfile {
   isAnonymous: boolean;
 }
 
+export interface Attachment {
+  type: 'image';
+  mimeType: string;
+  data: string; // Base64 string
+}
+
 export interface Message {
   id: string;
   text: string;
@@ -13,6 +19,7 @@ export interface Message {
   senderName: string;
   timestamp: number;
   role: 'user' | 'model' | 'system';
+  attachments?: Attachment[];
   isLoading?: boolean;
   status?: 'queued' | 'generating' | 'done'; // For queue management
   audioData?: string | null; // Base64 Audio data for persistence

@@ -1,7 +1,7 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { GEMINI_MODEL, GEMINI_TTS_MODEL } from "../constants";
 import { updateTokenUsage } from "./firebase";
-import { CanvasState } from "../types";
+import { CanvasState, Attachment } from "../types";
 
 // --- Key Configuration ---
 
@@ -156,7 +156,7 @@ const writeString = (view: DataView, offset: number, string: string) => {
 
 export const streamGeminiResponse = async (
   prompt: string, 
-  history: { role: 'user' | 'model', text: string }[],
+  history: { role: 'user' | 'model', text: string, attachments?: Attachment[] }[],
   canvasState: CanvasState | null,
   onChunk: (text: string) => void,
   signal?: AbortSignal
@@ -176,6 +176,7 @@ export const streamGeminiResponse = async (
   3. **Efficient Editing**: If the user wants to *modify* existing code, DO NOT rewrite the entire file unless necessary.
   4. **Smart Patching**: Use the **SEARCH/REPLACE** block format to update specific sections.
   5. **Full Rewrite**: If asked to create a new app or if the changes are structural ( > 50% of code), output the full \`<html>\` block.
+  6. **Visual Understanding**: If the user provides an image, assume it is a design reference or a bug report. Analyze it and recreate the design/fix the issue in the code.
 
   **SEARCH/REPLACE FORMAT:**
   To edit specific lines, use this exact format (do not wrap in markdown code blocks):
@@ -208,10 +209,26 @@ export const streamGeminiResponse = async (
   ${prompt}
   `;
 
-  const historyContents = history.map(h => ({
-    role: h.role,
-    parts: [{ text: h.text }]
-  }));
+  // Map history to Google GenAI Content format, handling text + images
+  const historyContents = history.map(h => {
+    const parts: any[] = [{ text: h.text }];
+    
+    if (h.attachments && h.attachments.length > 0) {
+        h.attachments.forEach(att => {
+            parts.push({
+                inlineData: {
+                    mimeType: att.mimeType,
+                    data: att.data
+                }
+            });
+        });
+    }
+
+    return {
+        role: h.role,
+        parts: parts
+    };
+  });
   
   const fullContents = [...historyContents, { role: 'user', parts: [{ text: systemInstruction }] }];
 
@@ -232,10 +249,7 @@ export const streamGeminiResponse = async (
 
       const chat = ai.chats.create({
         model: GEMINI_MODEL,
-        history: history.map(h => ({
-          role: h.role,
-          parts: [{ text: h.text }]
-        })),
+        history: historyContents, // Pass the formatted multimodal history
         config: { 
             systemInstruction: systemInstruction,
             temperature: 0.7, // Balanced creativity and precision for code
@@ -244,7 +258,40 @@ export const streamGeminiResponse = async (
         }
       });
 
-      const result = await chat.sendMessageStream({ message: prompt });
+      // The last message (the prompt) is sent here. 
+      // Note: We don't send images here because we appended them to the 'history' array 
+      // passed into the function in the ChatInterface before calling this. 
+      // If the *current* prompt has images, they should be the last item in `historyContents`.
+      // However, `chat.sendMessageStream` expects just the *new* message. 
+      // So we need to separate the logic slightly.
+
+      // Revision: `ai.chats.create` initializes history. 
+      // The `history` passed into this function INCLUDES the current user message at the end.
+      // We should pop the last message off to use as the `sendMessage` payload.
+      
+      const chatHistory = [...historyContents];
+      const lastMessage = chatHistory.pop(); // The current user prompt
+
+      if (!lastMessage) throw new Error("No message to send");
+
+      const chatSession = ai.chats.create({
+          model: GEMINI_MODEL,
+          history: chatHistory,
+          config: { 
+            systemInstruction: systemInstruction,
+            temperature: 0.7,
+            topK: 40,
+            topP: 0.95,
+        }
+      });
+      
+      // Send the popped message (Text + Images)
+      const result = await chatSession.sendMessageStream({ 
+          content: { 
+              role: lastMessage.role, 
+              parts: lastMessage.parts 
+          } 
+      });
       
       let textAccumulated = '';
       let usageMetadata: any = null;
