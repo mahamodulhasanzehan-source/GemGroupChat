@@ -211,7 +211,13 @@ export const streamGeminiResponse = async (
 
   // Map history to Google GenAI Content format, handling text + images
   const historyContents = history.map(h => {
-    const parts: any[] = [{ text: h.text }];
+    const parts: any[] = [];
+    
+    // Only add text part if it exists and isn't empty, OR if there are no attachments.
+    // Gemini prefers not to have empty text parts if other parts exist.
+    if (h.text && h.text.trim().length > 0) {
+        parts.push({ text: h.text });
+    }
     
     if (h.attachments && h.attachments.length > 0) {
         h.attachments.forEach(att => {
@@ -222,6 +228,11 @@ export const streamGeminiResponse = async (
                 }
             });
         });
+    }
+
+    // Fallback: If no parts at all (empty text, no attach), send empty text to avoid error
+    if (parts.length === 0) {
+        parts.push({ text: '' });
     }
 
     return {
@@ -247,27 +258,8 @@ export const streamGeminiResponse = async (
         inputTokens = countResult.totalTokens ?? 0;
       } catch (e) {}
 
-      const chat = ai.chats.create({
-        model: GEMINI_MODEL,
-        history: historyContents, // Pass the formatted multimodal history
-        config: { 
-            systemInstruction: systemInstruction,
-            temperature: 0.7, // Balanced creativity and precision for code
-            topK: 40,
-            topP: 0.95,
-        }
-      });
-
-      // The last message (the prompt) is sent here. 
-      // Note: We don't send images here because we appended them to the 'history' array 
-      // passed into the function in the ChatInterface before calling this. 
-      // If the *current* prompt has images, they should be the last item in `historyContents`.
-      // However, `chat.sendMessageStream` expects just the *new* message. 
-      // So we need to separate the logic slightly.
-
-      // Revision: `ai.chats.create` initializes history. 
-      // The `history` passed into this function INCLUDES the current user message at the end.
-      // We should pop the last message off to use as the `sendMessage` payload.
+      // The last message (the prompt) is sent via sendMessageStream. 
+      // We must separate it from the history passed to create().
       
       const chatHistory = [...historyContents];
       const lastMessage = chatHistory.pop(); // The current user prompt
@@ -285,12 +277,10 @@ export const streamGeminiResponse = async (
         }
       });
       
-      // Send the popped message (Text + Images)
+      // Use 'message' parameter correctly as per SDK
+      // Pass only parts as message, 'role' is not accepted in message payload for sendMessageStream
       const result = await chatSession.sendMessageStream({ 
-          content: { 
-              role: lastMessage.role, 
-              parts: lastMessage.parts 
-          } 
+          message: lastMessage.parts
       });
       
       let textAccumulated = '';

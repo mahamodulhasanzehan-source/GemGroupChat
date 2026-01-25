@@ -62,6 +62,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragCounterRef = useRef(0);
 
   // Call Logic Extracted to Hook
   const { 
@@ -262,19 +263,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       });
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragEnter = (e: React.DragEvent) => {
       e.preventDefault();
-      setIsDragOver(true);
+      e.stopPropagation();
+      dragCounterRef.current++;
+      if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+          setIsDragOver(true);
+      }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
       e.preventDefault();
-      setIsDragOver(false);
+      e.stopPropagation();
+      dragCounterRef.current--;
+      if (dragCounterRef.current === 0) {
+          setIsDragOver(false);
+      }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Needed to allow drop
   };
 
   const handleDrop = async (e: React.DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       setIsDragOver(false);
+      dragCounterRef.current = 0;
       
       const files = Array.from(e.dataTransfer.files);
       const newAttachments: Attachment[] = [];
@@ -931,7 +948,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
             {/* Drag & Drop Overlay */}
             {isDragOver && (
-                <div className="absolute inset-0 z-40 bg-[#4285F4]/20 border-2 border-dashed border-[#4285F4] rounded-lg flex items-center justify-center backdrop-blur-sm m-3">
+                <div className="absolute inset-0 z-40 bg-[#4285F4]/20 border-2 border-dashed border-[#4285F4] rounded-lg flex items-center justify-center backdrop-blur-sm m-3 pointer-events-none">
                     <span className="text-[#4285F4] font-medium text-sm">Drop images here</span>
                 </div>
             )}
@@ -960,8 +977,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 ${editingMessageId ? 'border-[#4285F4]' : 'border-transparent focus-within:border-[#444746]'}
                 ${isDragOver ? 'border-[#4285F4]' : ''}
                 `}
-                onDragOver={handleDragOver}
+                onDragEnter={handleDragEnter}
                 onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
                 onDrop={handleDrop}
             >
                 {/* File Input Button */}
