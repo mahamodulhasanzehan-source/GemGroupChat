@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://gemgroupchat.vercel.app/sitemap.xml
+Sitemap: https://gem-group-chat.vercel.app/sitemap.xml
